@@ -1,0 +1,220 @@
+# 전처리
+
+이 문서는 시각화 과정에서 필요했던 모든 전처리 과정에 대한 코드를 담고 있습니다.
+
+### Library
+```{r library, include=TRUE}
+library(dplyr)
+library(stringr)
+```
+
+### 카드 개설 개수와 신용점수의 상관관계 보기
+
+```{r correlation, include=TRUE}
+data <- read.csv("credit_card_data.csv", header=T, stringsAsFactors = F, fileEncoding = "UTF8")
+plot(data$num_opencard,data$avg_score,col="red")
+```
+
+### 소득 데이터 불러오기
+
+[출처] 마이크로데이터 통합서비스(MDIS)<http://mdis.kostat.go.kr/> 에서 16,17년도의 지역별고용조사 데이터를 사용했습니다.
+
+```{r mdis, include=TRUE}
+# 데이터 불러오기
+raw01 <- read.csv('extr_2016.txt') # 16년도 고용조사
+raw02 <- read.csv('extr_2017.txt') # 17년도 고용조사
+
+# 변수명 미리 지정
+variable_name = c('year', 'city', 'sex', # 연도 - 지역 - 성별
+                  'age', 'education', 'job', # 나이 - 교육수준 - 직업
+                  'position', 'wage', 'active') # 지위 - 임금 - 경제활동
+
+# 변수명 입력 후 병합
+colnames(raw01) <- variable_name
+colnames(raw02) <- variable_name
+employ <- full_join(raw01,raw02)
+
+# 연도 재설정
+employ$year[employ$year==201610] <- 2016
+employ$year[employ$year==201710] <- 2017
+
+# 성별 재설정
+employ$sex[employ$sex==1] <- '남자'
+employ$sex[employ$sex==2] <- '여자'
+
+# 연령대 재설정
+employ$ages[employ$age>=10 & employ$age<20] <- '10대'
+employ$ages[employ$age>=20 & employ$age<30] <- '20대'
+employ$ages[employ$age>=30 & employ$age<40] <- '30대'
+employ$ages[employ$age>=40 & employ$age<50] <- '40대'
+employ$ages[employ$age>=50 & employ$age<60] <- '50대'
+employ$ages[employ$age>=60 & employ$age<70] <- '60대'
+employ$ages[employ$age>=70] <- '70대 이상' # 70대 이상은 '70대 이상'으로 묶었습니다.
+
+# 필요한 변수만 선택
+employ <- employ %>% select(c(year, sex, age, ages, wage, active))
+
+# 경제활동인구만 선택
+employ <- subset(employ, active!=3)
+
+# 연령별/성별로 평균임금 추출
+mdis_data <- employ %>%
+  group_by(ages,sex) %>%
+  summarise(mean_wage=mean(wage,na.rm=T))
+
+# 외부 데이터로 저장
+write.csv(mdis_data, 'mdis_data.csv', row.names=F)
+```
+
+### credit_card_data 전처리
+
+MDIS에서 불러온 소득 데이터를 credit_card_data에 병합하고, 시각화에 필요한 내용만 추출하여 전처리했습니다.
+
+```{r credit, include=TRUE}
+# 데이터 불러오기
+credit <- read.csv("credit_card_data.csv", fileEncoding="UTF8", stringsAsFactors=F)
+mdis_data <- read.csv("mdis_data.csv", stringsAsFactors=F)
+
+# 연령 재설정 (70대 이상은 '70대 이상'으로)
+credit$ages<-ifelse(credit$ages %in% c("70대","80대","90대"),"70대 이상", credit$ages)
+
+# 지역별로는 보지 않고, 성별/연령별로만 살펴보겠습니다. 또한 모든 금액은 만 단위로 나누어 전처리했습니다.
+credit_data <- credit %>%
+  filter(str_detect(pop_cd,'Y')==T & str_detect(pop_cd,'Y1')==F) %>% # Y1이 아닌 내용을 필터링하여 10대 데이터를 제거했습니다. 
+  group_by(ages,sex) %>%
+  summarise(mean_num_opencard=mean(num_opencard), # 카드개설 개수
+            mean_avg_score=mean(avg_score), # 신용점수
+            mean_monthly_card_spend=mean(monthly_card_spend)/10000, # 카드소비량
+            mean_monthly_bk_loan=mean(monthly_bk_loan)/10000, # 은행대출
+            mean_monthly_cd_loan=mean(monthly_cd_loan)/10000, # 카드대출
+            mean_monthly_installments_loan=mean(monthly_installments_loan)/10000, # 할부대출
+            mean_monthly_insurance_loan=mean(monthly_insurance_loan)/10000, # 보험대출
+            mean_monthly_sbk_loan=mean(monthly_sbk_loan)/10000, # 저축은행대출
+            mean_monthly_loan= # 총대출
+              mean_monthly_bk_loan +
+              mean_monthly_cd_loan +
+              mean_monthly_installments_loan +
+              mean_monthly_insurance_loan +
+              mean_monthly_sbk_loan,
+            mean_monthly_nbk_loan=mean_monthly_loan-mean_monthly_bk_loan) #비은행대출
+
+# 소득 데이터 병합
+credit_data <- left_join(credit_data, mdis_data, by=c("ages","sex")) 
+
+# 소득 대비 카드사용량 파생변수 생성
+credit_data <- credit_data %>%
+  mutate(spend_wage_rate=mean_monthly_card_spend/mean_wage)
+
+# 비은행대출 비율 파생변수 생성
+credit_data <- credit_data %>%
+  mutate(nbk_prop=mean_monthly_nbk_loan/mean_monthly_loan)
+
+# 외부 데이터로 저장
+write.csv(credit_data,file="credit_data.csv", fileEncoding="UTF8", row.names = F)
+```
+
+### 샘플 데이터 
+
+시로앤마로 팀은 고객 친화형 시각화 서비스를 시연하기 위해서 고객 샘플 데이터를 제작했습니다.
+
+```{r sample, include=TRUE}
+# 고객 이름
+name <- c("이형선","김이정","이인섭","안지민","주은혁","송혜교",
+          "백종원","엄정화","마필두","김해숙","이순재","나문희")
+
+# 신용점수
+avg_score <- c(876,741,945,847,751,641,
+               702,804,905,705,602,700)
+
+# 신용등급
+avg_rat <- c(2,3,1,2,3,4,
+             3,2,1,3,4,3)
+
+# 성별
+sex <- c('남자','여자','남자','여자','남자','여자',
+         '남자','여자','남자','여자','남자','여자')
+
+# 연령대
+ages <- c('20대','20대','30대','30대','40대','40대',
+          '50대','50대','60대','60대','70대 이상','70대 이상')
+
+# 임금
+wage <- c(187,170,310,267,385,212,
+          320,139,180,123,95,43)
+
+# 카드소비
+monthly_card_spend <- c(213,150,200,212,356,180,
+                        345,145,140,95,20,14)
+
+# 총대출
+monthly_loan <- c(1492,1532,4033,3940,6942,6323,
+                  9146,8432,7534,6932,5694,4875)
+# 은행대출
+monthly_bk_loan <- c(402,1400,3940,432,6174,5402,
+                     9100,7504,7323,4300,4231,3821)
+# 비은행대출
+monthly_nbk_loan <- monthly_loan-monthly_bk_loan
+
+# 데이터 프레임화
+sample_data <- data.frame(name,ages,sex,avg_rat,avg_score,wage,monthly_card_spend,
+                          monthly_loan,monthly_bk_loan,monthly_nbk_loan)
+# 소득 대비 카드사용량
+sample_data$spend_wage_rate <- monthly_card_spend/wage
+
+# 비은행대출 비율
+sample_data$nbk_prop <- monthly_nbk_loan/monthly_loan
+
+# 비교할 집단 데이터 불러오기
+credit_data <- read.csv('credit_data.csv', fileEncoding='UTF8',stringsAsFactors=F)
+
+# 소비성향 변수 생성 (집단 평균과 비교)
+# 소득 대비 카드 < 평균 / 비은행대출 비율 < 평균 : 알뜰살뜰형
+# 소득 대비 카드 >= 평균 / 비은행대출 비율 >= 평균 : 눈앞캄캄형
+# 소득 대비 카드 <= 집단 평균 / 비은행대출 비율 > 집단 평균 : 위태위태형
+# 소득 대비 카드 >= 평균 / 비은행대출 비율 < 평균 : 흥청망청형 
+
+compare <- credit_data %>% select(ages, sex, spend_wage_rate, nbk_prop)
+sample_data <- left_join(sample_data, compare, by=c('sex','ages'))
+sample_data <- sample_data %>% 
+  mutate(mbti=ifelse(spend_wage_rate.x<spend_wage_rate.y & nbk_prop.x<nbk_prop.y,
+                     '알뜰살뜰형',
+                     ifelse(spend_wage_rate.x>=spend_wage_rate.y & nbk_prop.x>=nbk_prop.y,
+                            '눈앞캄캄형',
+                            ifelse(spend_wage_rate.x<=spend_wage_rate.y & nbk_prop.x>nbk_prop.y,
+                                   '위태위태형', '흥청망청형'))))
+
+# 이미지 삽입을 위한 위치좌표 입력
+set.seed(1)
+sample_data$x <- sample(12, 1:10)
+sample_data$y <- sample(12, 1:10)
+
+# 필요한 변수만 선택
+sample_data <- sample_data %>% select(name,ages,sex,avg_score,wage,
+                                      monthly_card_spend,
+                                      monthly_loan,
+                                      monthly_bk_loan,
+                                      monthly_nbk_loan,
+                                      mbti,x,y)
+write.csv(sample_data, file="sample_data.csv", fileEncoding="UTF8", row.names = F)
+```
+
+### 연령별 개설 카드 수
+
+연령별로 개설한 카드 수를 비교하기 위해 따로 전처리하였습니다.
+
+```{r num_card, include=TRUE}
+# 카드 데이터 불러오기
+credit <- read.csv('credit_card_data.csv', fileEncoding = 'UTF8', stringsAsFactors = F)
+
+# 연령별로 평균 개설 카드 수 추출
+num_card <- credit %>%
+  group_by(ages) %>%
+  summarise(mean_opencard=round(mean(num_opencard)))
+
+# 70대 이상 따로 묶어주기
+num_card$ages <- ifelse(num_card$ages %in% c("70대","80대","90대"),"70대 이상",num_card$ages)
+
+# 태블로에 넣을 수 있는 형식으로 전처리
+num_card1 <- rep(num_card$ages,num_card$mean_opencard)
+write.csv(num_card1, "num_opencard.csv", row.names = F)
+```

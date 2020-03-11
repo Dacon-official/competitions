@@ -1,0 +1,683 @@
+---
+title: 'Dacon_Mission_6th : Baseball Data chanllenge'
+author: "kim_min_su & Seo_dong_jin"
+date: "2019년 7월 24일"
+output: 
+  html_document :
+   number_sections: true
+   toc: true
+   toc_depth: 3
+---
+# 2019 KBO 타자 성적 예측
+OPS 를 예측하기에 앞서서 OPS = OBP(출루율) + SLG(장타율)로 정의되어있다.
+그러므로 OBP를 따로 예측하고 SLG를 따로 예측하여 더한 값으로 OPS를 예측할것이다.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, fig.align = "center", message = F, warning = F, fig.height = 8)
+```
+
+## Library and Load data
+Library
+```{r, inculde = F}
+library(tidyverse)
+library(caret)
+library(xgboost)
+library(knitr)
+library(corrplot)
+```
+Load Data
+```{r cars, warning=FALSE, message=FALSE}
+setwd('C://Users//zhddh//Desktop//Minsu//공모전//6th_competition')
+Regular_Season_Batter_Day <- read.csv("Regular_Season_Batter_Day_by_Day.csv", fileEncoding = "UTF-8", na.strings = c("","-"),stringsAsFactors=F)
+regular_season_Batter <- read.csv("Regular_Season_Batter.csv", fileEncoding = "UTF-8", na.strings = c("","-"),stringsAsFactors=F)
+```
+숫자형 자료를 가지는 변수중에 결측치 처리된것은 성적을 못 냈다는 뜻으로 0으로 대체한다
+```{r}
+# View(Regular_Season_Batter_Day[!complete.cases(Regular_Season_Batter_Day),])
+# View(regular_season_Batter[!complete.cases(regular_season_Batter),])
+num_col_regular<-which(sapply(regular_season_Batter,is.numeric))
+regular_season_Batter[,num_col_regular][is.na(regular_season_Batter[,num_col_regular])]<-0
+num_col_regular<-which(sapply(Regular_Season_Batter_Day,is.numeric))
+Regular_Season_Batter_Day[,num_col_regular][is.na(Regular_Season_Batter_Day[,num_col_regular])]<-0
+```
+안타가 있는데도 SLG가 0이거나 출루(안타,사사구)가 있는데도 출루율이 0인 선수들이 있다. 1999~2000년의 기록으로 이 기록은 삭제한다,
+```{r}
+# regular_season_Batter %>%
+#   rownames_to_column() %>% 
+#   filter((H > 0 & SLG == 0) | ((H>0 | BB >0 | HBP >0) & OBP == 0))
+regular_season_Batter <- regular_season_Batter[-c(479,747,1458,1675,1676,1935,1936),]
+```
+동명이인 확인 결과 동명이인은 없다.
+```{r}
+c(length(unique(Regular_Season_Batter_Day$batter_id)) == length(unique(Regular_Season_Batter_Day$batter_name)),
+length(unique(regular_season_Batter$batter_id)) ==length(unique(regular_season_Batter$batter_name)))
+```
+
+## 규정타석 정의
+선수들의 성적을 사용하는데 있어 몇 타석 이상의 선수들의 성적을 유요한지 판단이 필요했다.
+30타석 이상이 되면 선수들의 성적이 안정되는 것을 볼 수 있고 성적이 이상치로 판단된 선수들을 본 결과
+너무 잘한 경우의 선수들(강정호, 테임즈)를 제외하면 33타석 이하 선수들의 성적이 이상치판 판단 되었다.
+따라서 30타석 이상의 선수들의 성적만 선수의 유요한 성적이라고 판단하여 사용할것이다. 
+```{r, echo = F, include = T}
+ggplot(regular_season_Batter,aes(AB,OPS))+
+  geom_point(alpha = 0.1) + 
+  scale_x_continuous(breaks = seq(min(regular_season_Batter$AB), max(regular_season_Batter$AB), by = 30)) +
+  geom_vline(xintercept = 30,   
+             color = "blue", size = 1, linetype = "dashed") +
+  theme(legend.position = "none")
+
+outliers <- boxplot(regular_season_Batter$OPS, plot = FALSE)$out
+kable(regular_season_Batter[regular_season_Batter$OPS %in% outliers,] %>% 
+           arrange(desc(AB)) %>%
+           select(c('batter_name', 'year',"AB","OPS")) %>% 
+           head(10))
+```
+
+## lag function
+과거의 성적을 만들어 주는 함수 정의
+```{r}
+lag_function <- function(data_set, var_name, past){
+  # data_Set: 이용할 데이터 dataset type : tibble
+  # var_name: lag를 만들 변수 이름  type: character
+  # past : 몇넌전 lag 만들지결정   type : num
+  
+  data_set <- as.tibble(data_set) #data.frame 인경우 tibble로 바꾼다.
+  
+  for(j in c('AB', var_name)){
+    
+    assign(paste0("lag", past),c())
+    for(i in 1:nrow(data_set)){
+      
+      #lag value calculate
+      q <- data_set[(data_set$batter_name == data_set$batter_name[i])&(data_set$year == data_set$year[i]-past),j]
+      q <- as.data.frame(q) #tibble data 호환성문제
+      
+      if(nrow(q) == 0){
+        assign(paste0("lag", past),c(get(paste0("lag", past)), NA))
+      }else{
+        assign(paste0("lag", past),unlist(c(get(paste0("lag", past)), unname(q))))
+      }
+      
+    }
+    data_set[,paste0("lag",past,"_",j)] <- get(paste0("lag", past))
+  }
+  
+  #past 년전 성적중 30타석 미만 성적 결측치 처리 지우기
+  index_delete <- which(data_set[,paste0("lag",past,"_","AB")] < 30)
+  data_set[,paste0("lag",past,"_",var_name)][index_delete,] <- NA 
+  data_set[,paste0("lag",past,"_","AB")] <- NULL
+  
+  return(data_set)
+}
+```
+
+## OBP
+
+### correlation(변수선택 근거)
+과거의 성적으로 미래의 성적 OBP를 예측해야하므로 과거의 성적 중 어떤 성적이 OBP를 예측하는데 좋은 성적인지 결정하기 위해 correlation을 살펴보았다. 1년전 성적과 OBP와의 상관관계를 살펴본 결과 변수간의 높은 상관관계를 보이는 경우많았다.(야구의 성적을 이해하고 있다면 어찌보면 당연결 결과이다.) OBP를 예측하는데 있어 상관성이 높변 변수들을 이용해 예측한다면 예측에 부정적인 영향을 미칠것이다. 따라서 과거의 OBP 성적만 이용하여 OBP예 예측할것이다.
+```{r, include = T}
+numvars <- names(which(sapply(regular_season_Batter, is.numeric))) #숫자형 변수만 선택 
+dropvars <- c('batter_id','year',"OPS","SLG")
+numvars<-numvars[which(!numvars %in% dropvars)]
+#이거 이렇게 해주는 이유는 lag function에 batter name과 year가 필요한데 lag 만들 떄는 피요 없기 떄문에 이렇게 한것이다
+regular_season <- regular_season_Batter[,c(numvars,'year',"batter_name")]
+regular_season<- regular_season %>% filter(AB>=30)
+
+for(i in numvars){
+  regular_season <- lag_function(regular_season, i, 1)
+}
+regular_season<-regular_season %>% select(-c(numvars[-which(numvars %in% "OBP")],"batter_name", "year"))
+regular_season<-na.omit(regular_season) #결측치 있는 행 그냥 삭제 빠른 결과보 보위 우한ㄱ
+
+cor_num <- cor(regular_season)
+cor_sorted <- as.matrix(sort(cor_num[,"OBP"], decreasing = T)) #OBP관해서 정렬
+corrplot.mixed(cor_num[rownames(cor_sorted),rownames(cor_sorted)], tl.col = "black", tl.pos = "lt", tl.cex = 0.7, cl.cex = 0.7)
+
+```
+
+```{r, echo=F}
+rm(regular_season, cor_num, cor_sorted)
+```
+
+### Preprocessing Data
+#### First-half(전반기) OBP calculate 
+각 선수의 7/18(상반기)까지의 OBP를 계산할 것이다. 그런데 Day_by_Day data 에는 희생타가 없으므로 regular season_Batte에서 한 타석당 평균 희생타를 계산한 후에 전반기 희생타를 구할것이다.
+```{r}
+#희생타 구하기
+#OBP 출루율 계산하는 공식이용하여 SF(희생타)계산 >> (H+BB+HBP)/OBP-(AB+BB+HBP)
+regular_season_Batter <- regular_season_Batter %>% 
+  mutate(SF = round((H+BB+HBP)/OBP-(AB+BB+HBP),0))
+regular_season_Batter$SF[is.nan(regular_season_Batter$SF)] <- 0 
+
+#그 후 한타석당 평균 희생타 계산 후 필요한 것만 추출
+regular_season_Batter_SF <- regular_season_Batter %>% 
+  mutate(SF_1 = SF/AB) %>% 
+  select(batter_name, year, SF_1)
+
+#day_by_day에서 각 연도별 선수의 시즌 전반기 출루율과 관련된 성적 합 구하기
+sum_hf_yr_OBP<-Regular_Season_Batter_Day %>%
+  filter(date <= 7.18) %>%
+  group_by(batter_name, year) %>%
+  summarise(AB = sum(AB), H = sum(H), BB = sum(BB), HBP = sum(HBP))
+
+#day_by_day와 regular season에서 구한 희생타 관련 데이터를 합치기
+sum_hf_yr_OBP<-left_join(sum_hf_yr_OBP,regular_season_Batter_SF, by = c("batter_name", "year"))
+#한타석당 평균 희생타 계산
+sum_hf_yr_OBP <- sum_hf_yr_OBP %>% mutate(SF = round(SF_1*AB, 0)) %>% select(-SF_1)
+
+#전반기 OBP(출루율 계산)
+sum_hf_yr_OBP <- sum_hf_yr_OBP %>% mutate(OBP = (H+BB+HBP)/(AB+BB+HBP+SF))
+sum_hf_yr_OBP$OBP[is.nan(sum_hf_yr_OBP$OBP)] <- 0
+
+#계산했으니 필요없는 열 제거
+sum_hf_yr_OBP <- sum_hf_yr_OBP %>% select(batter_name, year, AB, OBP)
+```
+```{r, echo=F}
+rm(regular_season_Batter_SF)
+```
+
+####Add age column
+운동선수의 능력은 나이에 큰 영향을 받는다. 연령대별 OBP의 평균을 보면 20대 후반에서 30대 초중반 선수들의 성적이 커리어 하이를 기록하는 trend를 보인다. age(나이)또한 중요한 feature라 판단하여 각 선수들의 age(나이)를 sum_hf_yr_OBP에  넣어줄것이다.
+```{r, include =T}
+#나이 생성
+regular_season_Batter <- regular_season_Batter %>% mutate(age = year - as.numeric(substr(year_born,1,4)))
+#graph
+ggplot(regular_season_Batter %>% filter(AB>=30) %>% group_by(age) %>% summarise(mean_OBP = mean(OBP), median_OBP = median(OBP)))+
+  geom_line(aes(x = age, y = mean_OBP),color = "#00AFBB", size = 1.5, show.legend = TRUE)+
+  geom_point(aes(x = age, y = mean_OBP),color = "#00AFBB", size = 5, show.legend = TRUE)
+```
+
+```{r}
+#Add age column
+Batter_age <- regular_season_Batter %>% 
+    select(batter_name, year, age)
+Batter_age$batter_name <- as.character(Batter_age$batter_name)
+sum_hf_yr_OBP <- left_join(sum_hf_yr_OBP, Batter_age, by = c("batter_name", "year"))
+```
+
+#### Add 1,2,3년 전 OBP*
+```{r}
+# 3년전 OBP 까지 계산해서 column 만들
+sum_hf_yr_OBP <- lag_function(sum_hf_yr_OBP, "OBP", 1)
+sum_hf_yr_OBP <- lag_function(sum_hf_yr_OBP, "OBP", 2)
+sum_hf_yr_OBP <- lag_function(sum_hf_yr_OBP, "OBP", 3)
+```
+
+#### 과거 OBP 성적 결측치 처리
+
+과거 성적(1,2,3년전 OBP) 생성 과정에서 결측치가 발생하였다. 
+```{r}
+rbind("counts" = colSums(is.na(sum_hf_yr_OBP)), "%" = round(colSums(is.na(sum_hf_yr_OBP))/1320,2))
+```
+과거의 OBP 성적의 결측치는 
+1.**각 선수의 성적의 평균**과 2.**해당년도 시즌 전체 선수 성적의 평균**의 평균으로 결측치를 대체할것이다.
+```{r}
+#1.선수별 OBP 평균
+player_OBP_mean<- regular_season_Batter %>% 
+  filter(AB >= 30) %>% 
+  group_by(batter_name) %>% 
+  summarise(AB = sum(AB), H = sum(H), BB = sum(BB), HBP = sum(HBP), SF = sum(SF)) %>% 
+  mutate(mean_OBP = (H+BB+HBP)/(AB +BB+HBP+SF)) %>% 
+  select(batter_name, mean_OBP)
+
+player_OBP_mean$batter_name <- as.character(player_OBP_mean$batter_name)
+
+#2.시즌별 OBP 평균
+season_OBP_mean<-regular_season_Batter %>% 
+  filter(AB >= 30) %>%  
+  group_by(year) %>% 
+  summarise(AB = sum(AB),H = sum(H), BB = sum(BB), HBP = sum(HBP), SF = sum(SF))
+season_OBP_mean <- season_OBP_mean %>% mutate(mean_OBP = (H+BB+HBP)/(AB +BB+HBP+SF)) %>% select(year, mean_OBP)
+
+```
+####add player_OBP_mean(선수평균) column  
+선수별 OBP 평균은 Data set의 새로운 feature로 넣어줄것이다.  
+그 후에 전체시즌을 통틀어 구한 선수의 평균 OBP가 결측치인 경우 그 선수는 프로 데뷔 후 뛴 경기가 매우적고
+1,2,3 년전 성적이 다 결측치였다. 이런 선수들의 경우Data set에서 제거한다.  
+```{r}
+sum_hf_yr_OBP<-left_join(sum_hf_yr_OBP, player_OBP_mean, by="batter_name")
+sum_hf_yr_OBP <- sum_hf_yr_OBP[-which(is.na(sum_hf_yr_OBP$mean_OBP)),]
+```
+
+**결측치 처리하는 함수 정의**  
+각 시즌 평균데이터와 각 선수의 평균 이용하여 결측치 처리하는 함수 만들어서 결측치 처리한다.
+```{r}
+#결측치 처리하는 함수 정의
+lag_na_fill <- function(data_set, var_name, past, season_var_mean_data){
+  # data_Set: 이용할 데이터 dataset
+  # var_name: lag를 만들 변수 이름 character
+  # past : 몇넌전 lag 만들지결정  num
+  # season_var_name_mean_data season 별로 var_name의 평균을 구한 data
+  
+  for(i in 1:nrow(data_set)){
+    if(is.na(data_set[[paste0("lag",past,"_",var_name)]][i])){
+      data_set[[paste0("lag",past,"_",var_name)]][i] <- (data_set[[paste0("mean","_",var_name)]][i] + # #선수의 평균
+                                                           season_var_mean_data[[paste0("mean","_",var_name)]][season_var_mean_data[["year"]] %in% (data_set[["year"]][i]-past)] #전시즌의 평균
+      )/2
+    }
+  }
+  return (data_set)
+}
+
+```
+**결측치 처리**
+```{r}
+sum_hf_yr_OBP <- lag_na_fill(sum_hf_yr_OBP, "OBP", 1, season_OBP_mean) #1년전 성적 대체
+sum_hf_yr_OBP <- lag_na_fill(sum_hf_yr_OBP, "OBP", 2, season_OBP_mean) #2년전 성적 대체
+sum_hf_yr_OBP <- lag_na_fill(sum_hf_yr_OBP, "OBP", 3, season_OBP_mean) #3년전 성적 대체
+```
+
+## SLG
+### correlation(변수선택 근거)
+SLG도 OBP 마찬가지로 동일한 과정을 거친다.  
+```{r}
+numvars <- names(which(sapply(regular_season_Batter, is.numeric)))
+dropvars <- c('batter_id','year',"OPS","OBP")
+numvars<-numvars[which(!numvars %in% dropvars)]
+
+regular_season <- regular_season_Batter[,c(numvars,'year',"batter_name")]
+regular_season<- regular_season %>% filter(AB>=30)
+
+for(i in numvars){
+  regular_season <- lag_function(regular_season, i, 1)
+}
+regular_season<-regular_season %>% select(-c(numvars[-which(numvars %in% "SLG")],"batter_name", "year"))
+regular_season<-na.omit(regular_season) 
+
+cor_num <- cor(regular_season)
+cor_sorted <- as.matrix(sort(cor_num[,"SLG"], decreasing = T)) 
+corrplot.mixed(cor_num[rownames(cor_sorted),rownames(cor_sorted)], tl.col = "black", tl.pos = "lt", tl.cex = 0.7, cl.cex = 0.7)
+```
+
+```{r, echo=F}
+rm(regular_season, cor_num, cor_sorted)
+```
+
+
+
+### Processing Data
+
+#### First-half(전반기) SLG calculate
+```{r}
+#전반기 SLG 계산
+sum_hf_yr_SLG<-Regular_Season_Batter_Day %>%
+  filter(date <= 7.18) %>% 
+  group_by(batter_name, year) %>% 
+  summarise(AB = sum(AB), H = sum(H), X2B = sum(X2B), X3B = sum(X3B), HR = sum(HR))
+
+sum_hf_yr_SLG <- sum_hf_yr_SLG %>% 
+  mutate(SLG = (H-(X2B+X3B+HR) + X2B*2 + X3B*3 + HR*4)/AB)
+sum_hf_yr_SLG$SLG[is.nan(sum_hf_yr_SLG$SLG)] <- 0 
+
+#필요한 컬럼 
+sum_hf_yr_SLG <- sum_hf_yr_SLG %>% select(batter_name, year,AB, SLG)
+
+```
+
+####add age column
+```{r}
+#나이 넣어주기
+sum_hf_yr_SLG <- left_join(sum_hf_yr_SLG, Batter_age, by = c("batter_name", "year"))
+```
+
+####add 1,2,3년 전 OBP성적
+```{r}
+## 3년전 SLG 까지 계산해서 column 만들
+sum_hf_yr_SLG<-lag_function(sum_hf_yr_SLG, "SLG", 1)
+sum_hf_yr_SLG<-lag_function(sum_hf_yr_SLG, "SLG", 2)
+sum_hf_yr_SLG<-lag_function(sum_hf_yr_SLG, "SLG", 3)
+
+
+```
+
+#### 과거 SLG 성적 결측치 처리 
+```{r}
+#1 각 선수의 SLG 평균
+player_SLG_mean <- regular_season_Batter %>% 
+  filter(AB >= 30) %>% 
+  group_by(batter_name) %>% 
+  summarise(AB = sum(AB), H = sum(H), X2B = sum(X2B), X3B = sum(X3B), HR = sum(HR)) %>% 
+  mutate(mean_SLG = ((H-X2B-X3B-HR)+X2B*2+X3B*3+HR*4)/AB) %>% 
+  select(batter_name, mean_SLG)
+
+player_SLG_mean$batter_name <- as.character(player_SLG_mean$batter_name)
+
+#2 시즌별 SLG 평균
+season_SLG_mean <- regular_season_Batter %>% 
+  filter(AB >= 30) %>%  
+  group_by(year) %>% 
+  summarise(AB = sum(AB), H = sum(H), X2B = sum(X2B), X3B = sum(X3B), HR = sum(HR)) %>% 
+  mutate(mean_SLG = ((H-X2B-X3B-HR)+X2B*2+X3B*3+HR*4)/AB) %>% 
+  select(year, mean_SLG)
+```
+
+####add player_SLG_mean column
+```{r}
+#평균 행 더해준다
+sum_hf_yr_SLG<-left_join(sum_hf_yr_SLG, player_SLG_mean, by="batter_name")
+#평균 성적 없는 행 삭제
+sum_hf_yr_SLG <- sum_hf_yr_SLG[-which(is.na(sum_hf_yr_SLG$mean_SLG)),]
+```
+
+**결측치 처리**
+```{r}
+sum_hf_yr_SLG <- lag_na_fill(sum_hf_yr_SLG, "SLG", 1, season_SLG_mean) #1년전 성적 대체
+sum_hf_yr_SLG <- lag_na_fill(sum_hf_yr_SLG, "SLG", 2, season_SLG_mean) #2년전 성적 대체
+sum_hf_yr_SLG <- lag_na_fill(sum_hf_yr_SLG, "SLG", 3, season_SLG_mean) #3년전 성적 대체
+```
+
+## Modeling
+모델은 Lasso, RandomForests, XGBoost 를 사용해 그 중 가장 좋은 성능을 보이는 것을 이용할 것이다.  
+그리고 평가는 wrmse로 이뤄지기 떄문에 최종 성능 평가는 wrmse 함수를 만들어서 할 것이다.  
+### WRMSE
+```{r}
+wrmse = function(v, w, p){
+  # v : 실제값
+  # w : 타석수
+  # p : 예측값
+  sum(sqrt(((v-p)^2 * w)/sum(w)))
+}
+```
+### Lasso
+
+```{r}
+# 학습시킬 데이터 30타석 이상만 학습
+OBP_data<- sum_hf_yr_OBP %>% filter(AB >= 30)
+SLG_data<-sum_hf_yr_SLG %>% filter(AB >= 30)
+
+#Cv
+my_control <- trainControl(method = "cv", number = 5)
+
+#Lasso parameter tune
+#OBP
+set.seed(0625)
+lassoGrid <- expand.grid(alpha = 1, lambda = seq(0.0001,0.03,by = 0.0005))
+lasso_mod_OBP <- train(x=as.data.frame(OBP_data)[,5:9], y=OBP_data$OBP, method='glmnet', trControl= my_control, tuneGrid=lassoGrid) 
+#SLG
+set.seed(6589)
+lasso_mod_SLG <- train(x=as.data.frame(SLG_data)[,5:9], y=SLG_data$SLG, method='glmnet', trControl= my_control, tuneGrid=lassoGrid)
+
+```
+
+### Randomforest
+```{r}
+#OBP
+tunegrid <- expand.grid(.mtry = c(1:4))
+
+#OBP
+set.seed(0110)
+RF_mod_OBP<-train(x=OBP_data[,5:9], y=OBP_data$OBP, method="rf", trControl = my_control ,tuneGrid = tunegrid)
+
+#SLG
+set.seed(0110)
+RF_mod_SLG<-train(x=SLG_data[,5:9], y=SLG_data$SLG, method="rf", trControl = my_control ,tuneGrid = tunegrid)
+```
+
+### XGboost
+```{r}
+set.seed(7709)
+label_train_OBP <- OBP_data$OBP
+dtrain_OBP <- xgb.DMatrix(data = as.matrix(OBP_data[,5:9]), label= label_train_OBP)
+
+label_train_SLG <- SLG_data$SLG
+dtrain_SLG <- xgb.DMatrix(data = as.matrix(SLG_data[,5:9]), label= label_train_SLG)
+
+param<-list(
+  objective = "reg:linear",
+  booster = "gbtree",
+  eta=0.1,
+  gamma=0,
+  max_depth=1,
+  min_child_weight=1,
+  subsample=1,
+  colsample_bytree=1
+)
+
+xgb_mod_OBP <- xgb.train(data = dtrain_OBP, params=param, nrounds = 100)
+xgb_mod_SLG <- xgb.train(data = dtrain_SLG, params=param, nrounds = 100)
+```
+### predict & evaluation
+
+#### OBP 
+Random Forestes가 가장 좋은 성능 보인다.
+```{r}
+# prediction
+OBP_data$pr_lasso_OBP <- predict(lasso_mod_OBP, OBP_data[,5:9])
+OBP_data$pr_RF_OBP <- predict(RF_mod_OBP, OBP_data[,5:9])
+OBP_data$pr_XGB_OBP <- predict(xgb_mod_OBP,dtrain_OBP)
+
+#evaluation
+cbind('lasso' = wrmse(OBP_data$OBP, OBP_data$AB, OBP_data$pr_lasso_OBP),
+  'RF' = wrmse(OBP_data$OBP, OBP_data$AB, OBP_data$pr_RF_OBP),
+  'XGB' = wrmse(OBP_data$OBP, OBP_data$AB, OBP_data$pr_XGB_OBP))
+```
+
+#### SLG
+SLG 또한 Random Forest가 가장 좋은 성능을 보이므로 OBP, SLG 모두 Random Forest를 사용하여 예측할것이다.
+```{r}
+#prediction
+SLG_data$pr_lasso_SLG <- predict(lasso_mod_SLG, SLG_data[,5:9])
+SLG_data$pr_RF_SLG <- predict(RF_mod_SLG, SLG_data[,5:9])
+SLG_data$pr_XGB_SLG <- predict(xgb_mod_SLG,dtrain_SLG)
+
+#evaluation
+cbind('lasso'=wrmse(SLG_data$SLG, SLG_data$AB, SLG_data$pr_lasso_SLG),
+'RF' = wrmse(SLG_data$SLG, SLG_data$AB, SLG_data$pr_RF_SLG),
+'XGB' = wrmse(SLG_data$SLG, SLG_data$AB, SLG_data$pr_XGB_SLG))
+```
+
+### feature_importance  
+**선수 개인의 평균성적**이 가장 중요했고 그 뒤로 age(나이) 그리고 1,3,2년 전 성적이 중요했다.  
+```{r}
+set.seed(1569)
+RF_mod_OBP_FI<-train(x=OBP_data[,5:9], y=OBP_data$OBP, method="rf", trControl = my_control ,tuneGrid = tunegrid, importance = T)
+RF_mod_SLG_FI<-train(x=SLG_data[,5:9], y=SLG_data$SLG, method="rf", trControl = my_control ,tuneGrid = tunegrid, importance = T)
+
+#par(mfrow=c(1,2))
+layout(t(1:2))
+plot(varImp(RF_mod_OBP_FI, scale = FALSE), main = "RF_mod_OBP variable Importance ") 
+plot(varImp(RF_mod_SLG_FI, scale = FALSE), main = "RF_mod_SLG variable Importance ") 
+
+```
+
+
+```{r, echo=F}
+rm(OBP_data, SLG_data,RF_mod_OBP_FI, RF_mod_SLG_FI)
+```
+
+## Submission
+submission 파일 불러와서 train Datset(Age, 1,2,3년전 성적, 평균성적)와 같이 만들어 줄 것이다.
+```{r}
+#submission file making
+submission <- read.csv("submission.csv", stringsAsFactors=FALSE)
+#create year variable
+submission$year <- 2019
+
+#2019년의 Age(나이) 계산
+regular_season_Batter_year_born <- regular_season_Batter %>% select(batter_id,batter_name, year_born)
+regular_season_Batter_year_born<-distinct(regular_season_Batter_year_born)
+submission <- left_join(submission, regular_season_Batter_year_born, by = c("batter_id", "batter_name"))
+submission <- submission %>%  mutate(age = year - as.numeric(substr(year_born,1,4)))
+
+#submission  OBP, SLG 파일 2개 만든 후  합칠것
+submission_OBP <- submission
+submission_SLG <- submission
+```
+
+### OBP
+**add mean_OBP**
+```{r}
+submission_OBP <- left_join(submission_OBP, sum_hf_yr_OBP %>% select(batter_name, mean_OBP) %>% distinct(), by = "batter_name") 
+```
+
+**1,2,3 년전 OBP column 만들기**  
+sum_hf_yr_OBP에서 구한값을 이용할 것이다.
+```{r}
+for(i in c(1,2,3)){
+  #trainning data set에서 값을 가져와 lag로 만들어준다
+  lag_data <- sum_hf_yr_OBP %>% filter(year == 2019 - i & AB >= 30) %>% select(batter_name, OBP)
+  colnames(lag_data)[2] <- paste0("lag",i,"_OBP")
+  submission_OBP <- left_join(submission_OBP, lag_data, by="batter_name")
+}
+```
+
+**결측치 처리 하기전에 mean_OBP의 값을 대체하여야 한다.**  
+train data_set을 만들때는 mean_OBP가 결측치이면 그 선수들을 제거하였지만 test data_set은 그럴 수 없다. 따라서 어떻게 결측치를 처리할지 총 4가지 Case로 나눴다.
+```{r}
+submission_OBP$batter_name[is.na(submission_OBP$mean_OBP)]
+```
+
+**Case1**  
+regular_season_Batter에는 있으나 Regular_Season_Batter_Day에 없어서 결측치인 선수들 : 김주찬 이범호    
+regular_season_Batter Data로 결측치 처리 그리고 case1 의경우 regular_season_Batter 에서 1,2,3 년전 성적도 구할 수 있었다.
+
+```{r}
+for(i in c("김주찬", "이범호")){
+  row_index <- which(submission_OBP$batter_name == i)
+  
+  #mean_OBP계산
+  submission_OBP[row_index,]$mean_OBP <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>%
+    mutate(mean_OBP = sum(AB * OBP)/sum(AB)) %>%  select(mean_OBP) %>% unique()
+  
+  #get 1,2,3 년전 성적 from regular_season_Batter
+  submission_OBP[row_index,]$lag1_OBP <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% filter(year == 2018) %>% select(OBP)
+  submission_OBP[row_index,]$lag2_OBP <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% filter(year == 2017) %>% select(OBP)
+  submission_OBP[row_index,]$lag3_OBP <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% filter(year == 2016) %>% select(OBP)
+}
+```
+**Case2**  
+고명성 전민재 김철호 신범수 이병휘로 99~98년생의 어린 선수들로 평균 이상의 선수가 될 충분한 가능성이 있다고 판단 2018 시즌 성적으로 mean_OBP 대체한다.
+```{r}
+row_index <- which(submission_OBP$batter_name %in% c( "고명성","전민재","김철호","신범수","이병휘"))
+for(i in row_index) submission_OBP[i,]$mean_OBP <- season_OBP_mean %>% filter(year == 2018) %>% select(mean_OBP)
+```
+
+**Case3**  
+샌즈, 전병우 2018년 후반기 성적만 있어서 결측치 처리 됬다
+이 선수들은 regular_season_Batter성적으로 mean_OPS를 대체하고 lag1_OBP도 대체할것이다.
+```{r}
+for(i in c("전병우","샌즈")){
+  row_index <- which(submission_OBP$batter_name == i)
+  
+  #평균 성적 대체
+  submission_OBP[row_index,]$mean_OBP <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>%
+    mutate(mean_OBP = sum(AB * OBP)/sum(AB)) %>% select(mean_OBP) %>% unique()
+  
+  #1년전 성적 대체
+  submission_OBP[row_index,]$lag1_OBP <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% 
+    filter(year == 2018) %>% select(OBP)
+}
+
+```
+
+**Case4**  
+나머지 선수들은 은퇴했거나 1군 수준의 성적을 보여주지 못한 선수들로 이 선수들의 성적은
+하위 25% 성적으로 대체해서 값을 넣어줄것이다.  
+```{r}
+below_25_index <- which(is.na(submission_OBP$mean_OBP))
+submission_OBP$mean_OBP[below_25_index] <- quantile(player_OBP_mean$mean_OBP, 0.25)
+```
+list type colume change to num
+```{r}
+submission_OBP[which(sapply(submission_OBP, is.list))] <- sapply(submission_OBP[which(sapply(submission_OBP, is.list))], unlist)
+```
+**lag_na_function 이용하여 1,2,3 년전 성적 결측치 처리**
+```{r}
+for(i in c(1,2,3)) submission_OBP <- lag_na_fill(submission_OBP, "OBP", i, season_OBP_mean)
+```
+
+### SLG  
+앞서와 마찬가지로 OBP와 동일한 과정을 거친다.  
+**add mean_SLG(선수의 평균)**
+```{r}
+submission_SLG <- left_join(submission_SLG, sum_hf_yr_SLG %>% select(batter_name, mean_SLG) %>% distinct(), by = "batter_name")
+```
+
+**1,2,3년전 SLG 성적 column만들기**
+```{r}
+for(i in c(1,2,3)){
+  #trainning data set에서 값을 가져와 lag로 만들어준다
+  lag_data <- sum_hf_yr_SLG %>% filter(year == 2019 - i & AB >= 30) %>% select(batter_name, SLG)
+  colnames(lag_data)[2] <- paste0("lag",i,"_SLG")
+  submission_SLG <- left_join(submission_SLG, lag_data, by="batter_name")
+}
+```
+
+```{r}
+submission_SLG$batter_name[is.na(submission_SLG$mean_SLG)]
+```
+**Case1**
+```{r}
+case1_name <-c("김주찬", "이범호")
+
+for(i in case1_name){
+  row_index <- which(submission_SLG$batter_name == i)
+  
+  submission_SLG[row_index,]$mean_SLG <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>%
+    mutate(mean_SLG = sum(AB * SLG)/sum(AB)) %>% select(mean_SLG) %>% unique()
+  
+  submission_SLG[row_index,]$lag1_SLG <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% 
+    filter(year == 2018) %>% select(SLG) %>% as.numeric()
+  
+  submission_SLG[row_index,]$lag2_SLG <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% 
+    filter(year == 2017) %>% select(SLG) %>% as.numeric()
+  
+  submission_SLG[row_index,]$lag3_SLG <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% 
+    filter(year == 2016) %>% select(SLG) %>% as.numeric()
+
+}
+```
+**Case2**  
+
+```{r}
+row_index <- which(submission_SLG$batter_name %in% c("김철호","신범수", "이병휘", "전민재","고명성"))
+for(i in row_index) submission_SLG[i,]$mean_SLG <- season_SLG_mean %>% filter(year == 2018) %>% select(mean_SLG)
+```
+**Case3**
+```{r}
+for(i in c("샌즈", "전병우")){
+  row_index <- which(submission_SLG$batter_name == i)
+  submission_SLG[row_index,]$mean_SLG <- regular_season_Batter %>% filter(AB>=30 & (batter_name == i)) %>%
+    mutate(mean_SLG = sum(AB * SLG)/sum(AB)) %>% select(mean_SLG) %>% unique()
+  
+  submission_SLG[row_index,]$lag1_SLG <- regular_season_Batter %>% filter(AB>=30 & (batter_name ==i)) %>% filter(year == 2018) %>% select(SLG)
+}
+```
+
+**Case4**
+```{r}
+below_25_index <- which(is.na(submission_SLG$mean_SLG))
+submission_SLG$mean_SLG[below_25_index] <- quantile(player_SLG_mean$mean_SLG, 0.25)
+```
+list type colume change to num
+```{r}
+submission_SLG[which(sapply(submission_SLG, is.list))] <- sapply(submission_SLG[which(sapply(submission_SLG, is.list))], unlist)
+```
+
+**lag_na_function 이용하여 1,2,3 년전 SLG성적 결측치 처리**
+```{r}
+for(i in c(1,2,3)) submission_SLG <- lag_na_fill(submission_SLG, "SLG", i, season_SLG_mean)
+```
+
+### Predict
+```{r}
+#column 순서 정렬 예측할때처럼
+
+submission_OBP<- submission_OBP %>% select(c(1:5,7:9,6))
+submission_SLG<- submission_SLG %>% select(c(1:5,7:9,6))
+
+submission_OBP <- submission_OBP %>% arrange(batter_id)
+submission_SLG<- submission_SLG %>% arrange(batter_id)
+
+predict_OBP<-predict(RF_mod_OBP, submission_OBP[,5:9])
+predict_SLG<-predict(RF_mod_SLG, submission_SLG[,5:9])
+
+final_submission <- submission %>% select(batter_id, batter_name) 
+final_submission$OPS <-predict_OBP+predict_SLG
+```
+### 공인구 반발계수 조정
+공인구의 반발계수 하향 조정으로 인해 어느정도 타자의 성적 하락 예측된다. 그러나 [기사](http://www.donga.com/news/article/all/20190329/94792659/1)를 보면 반발계수의 효과가 클 것이라고 단언 할 수 없었다. 이러한 점을 고려하여 0.035의 OPS를 예측값에서 뺴줄것이다.
+```{r}
+final_submission$OPS <- final_submission$OPS - 0.035
+write.csv(final_submission, "Final_Submission.csv", row.names = FALSE)
+```
+

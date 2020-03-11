@@ -1,0 +1,1623 @@
+------------------------  
+
+#Title : 2019 KBO 타자 성적 예측대회 (상반기)    
+#Author: HSYUN    
+#Date : 2019-07-29    
+
+------------------------
+
+#**프로젝트의 방향성.**
+**모델링에 앞서 EDA과정에서 확인한 결과 각 선수들은 선수마다 평균치를 기준으로 타율, 장타율, 출루율등이 변동됨을 확인하였다.**  
+**그러나 선수마다의 평균치가 모두 다르며, 각 선수들은 모두 독립적이라고 생각 할 수 있다.  **  
+**하지만 기존의 모델들을 사용 할 경우, 한 선수의 성적을 예측하는데 있어 다른선수의 성적이 영향을 주는 요소로 작용할 수 있다고 판단된다.  **  
+**또한 시간의 흐름 역시 중요하게 작용되는데, 이 경우 2017년 까지의 기록을 통해 모델을 생성하고 2018년의 성적을 예측하는 Validation을 하게 된다면선수의 가장 최근년도의 기록이 누락되는 문제가 발생하게 된다.  **  
+
+**따라서 본 조는 기존에 사용되는 모델이 아니라 새로운 모델을 개발하고자 하였다.  **  
+**그 중 실제 메이저리그에서 사용되는 'MARCEL Projection'을 활용하여 각 선수의 최근 년도의 기록을 이용하고,본 조가 발견한 변동성이 적은 지표인 선수의 누적기록을 활용, 총 4개의 변수를 이용해 가중평균을 이용해 예측을 실시하였다.**  
+**그리고 해당 방법을 2017년과 2018년에 적용하여 가장 작은 값을 가지는 가중치를 선정하였다.  **  
+
+
+# **1. Data Cleansing And Crawling**
+
+## **1) 라이브러리 설치**
+```{r , include=FALSE}
+
+library(reshape2)
+
+library(RSelenium)
+library(data.table)
+library(readr)
+library(DescTools)
+library(rvest)
+library(httr)
+library(htmltools)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+
+
+```
+
+```{r , eval=FALSE}
+ 
+library(reshape2)
+
+library(RSelenium)
+library(data.table)
+library(readr)
+library(DescTools)
+library(rvest)
+library(httr)
+library(htmltools)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+```
+
+## **2) 데이터 확인**
+```{r, include=FALSE}
+regular_season<-data.frame(read_csv('C:/Users/kitae/Desktop/공모전/Regular_Season_Batter.csv'))
+regular_season_dbd<-data.frame(read_csv('C:/Users/kitae/Desktop/공모전/Regular_Season_Batter_Day_by_Day.csv'))
+pre_season<-data.frame(read_csv('C:/Users/kitae/Desktop/공모전/Pre_Season_Batter.csv'))
+
+
+```
+
+```{r, eval=FALSE}
+regular_season<-data.frame(read_csv('C:/Users/kitae/Desktop/공모전/Regular_Season_Batter.csv'))
+regular_season_dbd<-data.frame(read_csv('C:/Users/kitae/Desktop/공모전/Regular_Season_Batter_Day_by_Day.csv'))
+pre_season<-data.frame(read_csv('C:/Users/kitae/Desktop/공모전/Pre_Season_Batter.csv'))
+
+
+```
+
+
+
+```{r}
+str(regular_season)
+str(regular_season_dbd)
+str(pre_season)
+
+##기록된 데이터를 간단하게 살펴보면 몇몇선수로
+```
+
+
+
+## **3) 정규시즌 성적 데이터 **
+###**이대호,김태균,박석민,서건창,양의지,구자욱,이정후**
+### **why?**
+
+선수마다 어느정도 고유의 OPS값을 가지며 그 값을 기준으로 조금 씩 변동할 것이라 생각됩니다.
+
+###이대호의 경우 2012~2016 외국리그 소속이였다. 
+```{r} 
+regular_season %>% filter(batter_name=="이대호") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+
+```
+
+###김태균의 경우 2010~2011 일본리그 치바롯데마린즈 소속이였다.
+```{r}
+regular_season %>% filter(batter_name=="김태균") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+```
+
+```{r}
+regular_season %>% filter(batter_name=="박석민") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+regular_season %>% filter(batter_name=="서건창") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+regular_season %>% filter(batter_name=="양의지") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+regular_season %>% filter(batter_name=="구자욱") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+regular_season %>% filter(batter_name=="이정후") %>% ggplot(aes(x=year,y=OPS))+geom_line()
+
+
+
+```
+
+
+##시즌별 기록의 변화
+```{r}
+season.mean.2<- fread("C:/Users/kitae/Desktop/공모전/season_mean.csv",encoding='UTF-8')%>%data.frame()
+```
+##타율
+```{r}
+
+ggplot(data=season.mean.2) + geom_line(aes(x=year,y=AVG),color='red')
+
+```
+    
+###2014년을 기준으로 리그 평균타율이 급격하게 증가하는것을 확인 할 수 있다.
+
+##장타율
+```{r}
+ggplot(data=season.mean.2)+geom_line(aes(x=year,y=SLG))
+
+
+```
+  
+**장타율 역시 2014년에 급격하게 상승하는 모습을 보여준다.**  
+**그러나 장타율은 타율과 큰 관련이 있으므로 타율을 제외한 순수 장타율의 변화를 살펴보았다.**  
+```{r}
+ggplot(data=season.mean.2)+geom_line(aes(x=year,y=ISO_pow))
+
+```
+  
+**순수 장타율또한 급격한 상승을 보여준다.**  
+**두개의 그래프를 같이 그려보았다.**  
+```{r}
+ggplot(data=season.mean.2)+geom_line(aes(x=year,y=SLG),colour='red')+
+  geom_line(aes(x=year,y=ISO_pow),colour='blue')
+
+```
+  
+**타율을 제외하고 순수 장타율과 장타율의 변화 추이도 비슷한 것을 확인하였다.**  
+
+##출루율
+```{r}
+ggplot(data=season.mean.2)+geom_line(aes(x=year,y=OBP))
+
+```
+  
+**출루율역시 2014년에 급격히 상승하는 것을 확인 할 수 있다.**  
+**그러나 출루율은 간단하게 계산했을때 (안타+볼넷)/(타수+볼넷)의 형태로 타율과 큰 관련이 있다.**  
+**따라서 출루율 역시도 타율을 뺀 순수 출루율의 변화를 살펴 보았다.**  
+```{r}
+ggplot(data=season.mean.2)+geom_line(aes(x=year,y=ISO_obp))
+
+```
+  
+**순수출루율은 2014년 이후로 급격하게 떨어지고 있는 것을 확인 할 수 있다.**  
+**두개의 그래프를 같이 그려 보았다.**  
+```{r}
+ggplot(data=season.mean.2)+geom_line(aes(x=year,y=OBP),colour='red')+
+  geom_line(aes(x=year,y=ISO_obp),colour='blue')
+
+```
+  
+**두개의 변화가 다른 형태를 보여주고 있음을 확인 할 수 있다.**  
+**또한 2013년부터 9구단 체제로 프로야구가 진행되었으며,**  
+**2014년 10구단이 창단되면서 2014년을 기준으로 리그 전체에 큰 변화가 있음을 알 수 있다.**  
+**따라서 2014년 이후의 기록을 이용하는 것이 최근 리그의 흐름을 반영하는데 올바른 방향이라고 생각된다.**  
+
+
+### **결과**
+경기 년차가 적은 선수의 경우 흐름을 보기 쉽지 않으나 선수마다 년차가 커지면 어느정도 값을 기준으로 변동하는 경향이 있는것 같다.
+
+## **4) 정규시즌 일별 성적 데이터**
+### why?
+매년의 OPS로 선수 고유의 OPS를 구하기에는 표본이 부족하여 편차가 크게 나타나므로 데뷔후 매일 누적OPS를 사용하여 편차를 줄이는 방식으로 고유 OPS를 구하려하였다. (단, 리그의 모든 선수를 나타내기에는 공간이 부족하여 대표적인 선수(구자욱) 로 시각화하였다.)
+```{r}
+regular_season_dbd%>%group_by(batter_id)%>%summarise(n=n())%>%arrange(desc(n))
+check_day<-regular_season_dbd%>%filter(batter_id==19)%>%select(batter_id,batter_name,year,date,AB,H,X2B,X3B,HR,BB,HBP,avg2)
+check_day_final<-c()
+
+for(i in 1:nrow(check_day)){
+  cum.data<-check_day[1:i,]%>%group_by(batter_id)%>%summarise(total_AB=sum(AB),
+                                                             total_H=sum(H),
+                                                             total_X2B=sum(X2B),
+                                                             total_X3B=sum(X3B),
+                                                             total_HR=sum(HR),
+                                                             total_BB=sum(BB),
+                                                             total_HBP=sum(HBP))%>%group_by(batter_id)%>%
+    mutate(AVG=total_H/total_AB,SLG=(total_H-total_X2B-total_X3B-total_HR+total_X2B*2+total_X3B*3+total_HR*4)/total_AB,OBP=(total_H+total_BB+total_HBP)/(total_AB+total_BB+total_HBP),index=i)%>%
+    select(batter_id,total_AB,AVG,SLG,OBP,index,total_AB)
+  check_day_final<-rbind(check_day_final,cum.data)
+}
+```
+
+
+##OPS
+```{r}
+## ops avg iso_pow iso_obp
+check_day_final <- check_day_final %>% mutate(OPS=SLG+OBP,ISO_pow = SLG-AVG,ISO_obp = OBP-AVG)
+ggplot(data=check_day_final, aes(x=index,y=OPS))+geom_line()
+
+```
+
+
+###AVG 타율 (RED)
+###iso_obp 순수 출루율(BLUE)
+###iso_pow 순수 장타율(GREEN)
+
+```{r}
+ggplot(data=check_day_final, aes(x=index,y=AVG),color="red")+geom_line(color="red")+
+  geom_line(aes(y=ISO_pow),color="blue")+
+  geom_line(aes(y=ISO_obp),color="green")
+
+
+```
+
+##결과
+**그래프를 확인해 보았을 때 선수의 누적 성적은 시즌이 흐름에 따라 큰 변화가 생기지 않으며 선수의 누적기록을 기준으로 시즌마다 약간의 변동이 있는 형태임을 확인 할 수 있다.**  
+**따라서 변동성이 적은 새로운 지표로 선수의 누적기록(cum_data)을 사용하기로 한다.**
+
+
+## **5) 프리시즌 성적 데이터**
+
+###why?
+프리시즌 데이터와 정규시즌간의 연관성이 있으면 프리시즌 데이터 까지 사용하여 표본으로 사용하려했다.
+
+
+```{r}
+
+xxx<-left_join(pre_season%>%select(batter_id,OPS,year),regular_season%>%select(batter_id,OPS,year),by=c('batter_id','year'))
+plot(xxx$OPS.x[xxx$OPS.x>0&xxx$OPS.y>0],xxx$OPS.y[xxx$OPS.x>0&xxx$OPS.y>0])
+cor(xxx$OPS.x[xxx$OPS.x>0&xxx$OPS.y>0],xxx$OPS.y[xxx$OPS.x>0&xxx$OPS.y>0],use='complete.obs')
+
+
+```
+
+
+```{r }
+
+xxx<-left_join(pre_season%>%select(batter_id,avg,year),regular_season%>%select(batter_id,avg,year),by=c('batter_id','year'))
+plot(xxx$avg.x[xxx$avg.x>0&xxx$avg.y>0],xxx$avg.y[xxx$avg.x>0&xxx$avg.y>0])
+cor(as.numeric(xxx$avg.x[xxx$avg.x>0&xxx$avg.y>0]),xxx$avg.y[xxx$avg.x>0&xxx$avg.y>0],use='complete.obs')
+
+xxx<-left_join(pre_season%>%select(batter_id,SLG,year),regular_season%>%select(batter_id,SLG,year),by=c('batter_id','year'))
+plot(xxx$SLG.x[xxx$SLG.x>0&xxx$SLG.y>0],xxx$SLG.y[xxx$SLG.x>0&xxx$SLG.y>0])
+cor(xxx$SLG.x[xxx$SLG.x>0&xxx$SLG.y>0],xxx$SLG.y[xxx$SLG.x>0&xxx$SLG.y>0],use='complete.obs')
+
+xxx<-left_join(pre_season%>%select(batter_id,OBP,year),regular_season%>%select(batter_id,OBP,year),by=c('batter_id','year'))
+plot(xxx$OBP.x[xxx$OBP.x>0&xxx$OBP.y>0],xxx$OBP.y[xxx$OBP.x>0&xxx$OBP.y>0])
+cor(xxx$OBP.x[xxx$OBP.x>0&xxx$OBP.y>0],xxx$OBP.y[xxx$OBP.x>0&xxx$OBP.y>0],use='complete.obs')
+
+xxx<-left_join(pre_season%>%select(batter_id,SLG,avg,year),regular_season%>%select(batter_id,SLG,avg,year),by=c('batter_id','year')) %>% filter(is.na(SLG.x)==F) %>% filter(is.na(SLG.y)==F) %>% mutate(iso.x = SLG.x - as.numeric(avg.x),iso.y = SLG.y - avg.y)
+plot(xxx$iso.x,xxx$iso.y)
+cor(xxx$iso.x,xxx$iso.y,use='complete.obs')
+
+xxx<-left_join(pre_season%>%select(batter_id,OBP,avg,year),regular_season%>%select(batter_id,OBP,avg,year),by=c('batter_id','year')) %>% filter(is.na(OBP.x)==F) %>% filter(is.na(OBP.y)==F) %>% filter(avg.x != '-') %>%
+ mutate(iso.x = OBP.x - as.numeric(avg.x),iso.y = OBP.y - avg.y)
+plot(xxx$iso.x,xxx$iso.y)
+cor(xxx$iso.x,xxx$iso.y,use='complete.obs')
+
+
+```
+###**결과**
+
+기초적인 기록들만 기록되어 있는 것을 확인할 수 있다.
+이중 먼저 정규시즌과 프리시즌 성적의 관계를 살펴보았다.
+프리시즌과 정규시즌의 OPS는 큰 관계가 없음을 학인 할 수 있다.
+
+```{r, include=FALSE}
+##크롤링 변수와 기존 변수간의 상관관계 확인
+stat <- as.data.frame(read_csv('C:/Users/kitae/Desktop/공모전/statiz2.csv'))
+```
+
+
+## **6) 스탯티즈 크롤링(결과 파일은 첨부함)**
+```{r, eval=FALSE}
+url.first<-'http://www.statiz.co.kr/stat.php?opt=0&sopt=0&re=0'
+year.start<-'&ys='
+year.end<-'&ye='
+url.mid<-'&se=0&qu=all&po=0'
+content<-'&da='
+url.fin<-'&o1=WAR_ALL_ADJ&de=1&lr=0&ml=2&sn=100'
+page<-'&pa='
+stattiz<-list(기본=c(),확장=c(),가치=c(),클러치=c(),타석=c(),타구.f=c(),타구.s=c(),팀배팅_1=c(),파워=c(),
+                팀배팅_2<-c(),도루<-c(),주루<-c(),구종가치<-c(),구종구사<-c())
+#stattizw<-list(기본=c(),확장=c(),가치=c(),클러치=c(),타석=c(),타구.f=c(),타구.s=c(),팀배팅1=c(),파워=c(),
+#                 팀배팅2<-c(),도루<-c(),주루<-c(),구종가치<-c(),구종구사<-c())
+for(year in 2014:2018){
+  for(content.page in 1:14){
+    url<-paste(url.first,year.start,year,year.end,year,content,content.page,url.fin,page,0,sep='')
+    mmmmm<-read_html(url)%>%html_nodes("#mytable")%>%html_nodes("tr")%>%html_nodes("td")%>%html_text()
+    mmmmm2<-data.frame(matrix(mmmmm,ncol=length(mmmmm)%/%100,byrow=T))
+    nc<-ncol(mmmmm2)
+    for(page.num in c(0,100,200,300)){
+      url<-paste(url.first,year.start,year,year.end,year,content,content.page,url.fin,page,page.num,sep='')
+      ranking<-read_html(url)%>%html_nodes("#mytable")%>%html_nodes("tr")%>%html_nodes("td")%>%html_text();Sys.sleep(1)
+      ranking.data<-data.frame(matrix(ranking,ncol=nc,byrow=T))
+      ranking.data<-data.frame(cbind(year,content.page,ranking.data))
+      stattiz[[content.page]]<-dplyr::bind_rows(stattiz[[content.page]],ranking.data)
+    }
+  }    
+}
+names(stattiz[[1]])<-c('year','기본','순위','이름','팀','WAR','G','PA','AB','R','H','X2B',
+                       'X3B','HR','TB','RBI','SB','CS','BB','HBP','IBB','SO','GDP','SAC','SF','AVG','OBP','SLG','OPS','wOBA','wRC+','WAR+','WPA')
+
+names(stattiz[[2]])<-c('year','확장','순위','이름','팀','PA','HR%','BB%','K%','BB.K','ISOp','ISOd',
+                       'babip','Spd','PSN','wOBA','wRC','wRC27','wRAA')
+
+names(stattiz[[3]])<-c('year','가치','순위','이름','팀','WAR','PA','Bat','Steal','Run','Total_at','Defen',
+                       'Pos','Total_def','RAA-Adj','RAA','대체Run','RAR','RPW',
+                       'WAA','WARBat','WarOff','WAR+','dWAA','WAR')
+
+names(stattiz[[4]])<-c('year','클러치','순위','이름','팀','PA','득점권PA','득점권%','득점권AVG','RBI','Pure','Base',
+                       'Pure%','RE24타격','RE24주루','RE24','REW','타격WPA','주루WPA',
+                       'WPAPlus','WPAMinus','WPA','pLI','WPA/LI','Clutch','ph','phLI')
+
+names(stattiz[[5]])<-c('year','타석','순위','이름','팀','PA','P.sum','P/PA','Look.strike','Swing.strike','Foul.strike','Bat.strike',
+                       'S%','B%','All.Bat%','First.Bat%','Contact%','Strike2.cut','Ball2.eye',
+                       'Swing.SO','Look.SO','LSO%','N.Chance','N.Swing','W%')
+
+names(stattiz[[6]])<-c('year','타구1','순위','이름','팀','PA','FO','GO','FO.GO','InP%','Infield%','Outfield%',
+                       'babip','Infield.AVG','Outfield.AVG','InfieldFly','InfieldFly%','Infield.H','Infield.H%',
+                       '실책출루','포스아웃출루','Bunt.H','Bunt.Out','Bunt.AVG','Bunt.N','Bunt%')
+
+names(stattiz[[7]])<-c('year','타구2','순위','이름','팀','PA','Left%','Center%','Right%','Pull%','Push%',
+                       'Left.N','Center.N','Right.N','Pull.N','Push.N',
+                       'Hit.LeftN','Hit.CenterN','Hit.RightN','Hit.PullN','Hit.PushN',
+                       'AVG.Left','AVG.Center','AVG.Right','AVG.Pull','AVG.Push','babip')
+
+names(stattiz[[8]])<-c('year','팀배팅1','순위','이름','팀','PA',
+                       'RBI','Pure','Onbase','Pure%',
+                       'GDP','GDP.situ','GDP%',
+                       'LOB','LOB.PA','Team.LOB',
+                       'SAF.suc','SAF.fail','SAF%')
+
+names(stattiz[[9]])<-c('year','파워','순위','이름','팀','PA',
+                       'HR','Solo.HR','Two.HR','Three.HR','Full.HR',
+                       'Left.HR','Left_Center.HR','Center.HR','Right_Center.HR','Right.HR',
+                       'XHB','XH.AB','XH.H','HR.XH','HR.AO','PA.HR','AB.HR','ISOp')
+
+#names(stattiz[[10]])<-c('year','팀배팅2','순위','이름','팀','PA',
+#                       'HR','Solo.HR','Two.HR','Three.HR','Full.HR',
+#                       'Left.HR','Left_Center.HR','Center.HR','Right_Center.HR','Right.HR',
+#                       'XHB','XH.AB','XH.H','HR.XH','HR.AO','PA.HR','AB.HR','ISOp')
+
+names(stattiz[[11]])[1:12]<-c('year','도루','순위','이름','팀','PA',
+                              'RAA도루','SB','CS','SB%','SB.Chan','SB.Trial%' )
+
+names(stattiz[[12]])[c(1:10,28:32)]<-c('year','주루','순위','이름','팀','PA',
+                                       'R','Run.chan','RS%','RAA주루',
+                                       '추가진루','추가진루%','득실','주루사','주루사%')
+names(stattiz[[13]])<-c('year','구종가치','순위','이름','팀','PA',
+                        '직구','슬라','커브','첸졉','스플','싱커','너클','기타',
+                        '직구.100','슬라.100','커브.100','첸졉.100','스플.100','싱커.100','너클.100','기타.100')
+names(stattiz[[14]])<-c('year','구종구사','순위','이름','팀','PA',
+                        '직구구속','슬라구속','커브구속','첸졉구속','스플구속','싱커구속','너클구속','기타구속',
+                        '직구%','슬라%','커브%','첸졉%','스플%','싱커%','너클%','기타%',
+                        'IZ_Swing%','OZ_Swing%','All_Swing%','IZ_Cont%','OZ_Cont%','All_Cont%','SZone%')
+
+for(i in 1:14){
+  stattiz[[i]]<- stattiz[[i]][str_detect(stattiz[[i]]$팀,'P')==F,]
+}
+nrow(stattiz[[i]])
+
+for(i in 1:14){
+  file.name<-paste('C:/Users/hsyun/Desktop/school/zper/baseball/drive-download-20190212T022334Z-001/stattiz',i,'.csv',sep='')
+  write.csv(stattiz[[i]],file.name)
+}
+
+
+stat<-left_join(stattiz[[1]][,c(-2,-3)],stattiz[[2]][,c(1,4:19)],by=c('year'='year','이름'='이름','팀'='팀'))
+stat<-stat[,str_detect(names(stat),'.y$')==F]
+names(stat)<-gsub('.x','',names(stat))
+for(i in c(3:9,11:14)){
+  stat<-left_join(stat,stattiz[[i]][,-c(2,3)],by=c('year'='year','이름'='이름','팀'='팀'))
+  stat<-stat[,str_detect(names(stat),'.y$')==F&str_detect(names(stat),'.x.x$')==F]
+  names(stat)<-gsub('.x','',names(stat))
+}
+names(stat)
+names(stat)<-gsub('.x','',names(stat))
+str_detect(names(stat),'X\\d')
+
+readr::write_excel_csv(stat,'C:/Users/hsyun/Desktop/statiz2.csv')
+names(stat)
+
+stat4<-stat[,c(1:3,5:7,24:26,28,32:34,38:40,81:88,91,94,104:105,108,119:120,134:135,157,192:199,224:229)]
+for(i in 4:ncol(stat4)){
+  stat4[,i]<-as.numeric(stat4[,i])
+}
+```
+
+## **7) KBO 크롤링**
+
+```{r, eval=FALSE}
+#kbo기록실
+##타자 기록 크롤링
+url_before <- "https://www.koreabaseball.com/Record/Player/"
+url_mid2 <- c('HitterBasic/Basic1','HitterBasic/Basic2','HitterBasic/Detail1')
+url_aspx<- ".aspx"
+
+pJS <- wdman::chrome(port = 4567L,version='75.0.3770.90')
+remDr <- remoteDriver(port = 4567L, browserName = 'chrome')
+remDr$open()
+
+bat<-list(basic1<-c(),basic2<-c(),detail<-c())
+
+for(i in 1:length(url_mid2)){
+  url<-paste(url_before,url_mid2[i],url_aspx,sep='')
+  remDr$navigate(url);Sys.sleep(1.5)
+  htxt <- remDr$getPageSource()[[1]]  ##현재ㅐ 페이지에서 html확인
+  htxt<-read_html(htxt);Sys.sleep(0.5)
+  table <- html_nodes(htxt, ".select03")
+  content <- html_nodes(table, "option");Sys.sleep(0.5)
+  index <- htxt %>% html_nodes("div.record_result > table") %>%html_nodes('thead') %>%html_nodes('th') %>%   html_text();Sys.sleep(0.5)
+  for(j in 21:as.numeric(length(content)-1)){ Sys.sleep(0.5) ##년도 반복
+    year_select<-remDr$findElement(using="css selector", value=paste('option:nth-child','(',j,')',sep='')) ;Sys.sleep(0.5)
+    year_select$clickElement(); Sys.sleep(2)
+    if(i==2){
+      stat_select<-remDr$findElement(using="css selector", value='a.next')  ;Sys.sleep(0.5)
+      stat_select$clickElement() ;Sys.sleep(3)}
+    else if (i==3){
+      stat_select<-remDr$findElement(using="xpath", value='//*[@id="cphContents_cphContents_cphContents_udpContent"]/div[2]/ul/li[2]/a')  ;Sys.sleep(0.5)
+      stat_select$clickElement() ;Sys.sleep(3)
+    }
+    team_list <- remDr$getPageSource()[[1]] ; Sys.sleep(0.5)##현재ㅐ url에서 html확인
+    team_list <- read_html(team_list) ; Sys.sleep(0.5)
+    team_list <- html_nodes(team_list, ".select02") %>%html_nodes('option')
+    team_num<-as.character(team_list) ; Sys.sleep(0.5)
+    team_num_lower<-which(str_detect(as.character(team_list),'팀 선택'))+1 ; Sys.sleep(0.5)
+    team_num_upper<-which(str_detect(as.character(team_list),'포지션'))-1 ; Sys.sleep(0.5)
+    num_of_team<-team_num_upper-team_num_lower+1 
+    for(k in 1:num_of_team){ Sys.sleep(1) ##팀 반복
+      team_select<-remDr$findElement(using="xpath", value=paste('//*[@id="cphContents_cphContents_cphContents_ddlTeam_ddlTeam"]/option[',k+1,']',sep='')) ; Sys.sleep(0.5)
+      team_select$clickElement() ; Sys.sleep(3)
+      page_html<-remDr$getPageSource()[[1]];Sys.sleep(0.5)
+      page_html<-read_html(page_html)
+      page_num_k<-page_html%>%html_nodes("div.record_result > div > a");Sys.sleep(0.5)
+      page_select<-remDr$findElement(using="css selector", value=paste('#',xml_attrs(page_num_k[[1]])[["id"]],sep='')) ;  
+      page_select$clickElement();Sys.sleep(3)
+      page_html_2<-remDr$getPageSource()[[1]];Sys.sleep(0.5)
+      page_html_2<-read_html(page_html_2)
+      table_2<-page_html_2 %>% html_nodes("div.record_result > table") %>%html_nodes('tbody') %>%html_nodes('td') %>%   html_text();    Sys.sleep(1)
+      if(length(table_2)==0){
+        next
+      }
+      else{
+        if(length(page_num_k)==1){
+          page_select<-remDr$findElement(using="css selector", value=paste('#',xml_attrs(page_num_k[[1]])[["id"]],sep='')) ;  
+          page_select$clickElement();Sys.sleep(3)
+          table_html<-remDr$getPageSource()[[1]]
+          table_html<-read_html(table_html);Sys.sleep(0.5)
+          table_ranking <- table_html %>% html_nodes("div.record_result > table") %>%html_nodes('tbody') %>%html_nodes('td') %>%   html_text();    Sys.sleep(1)
+          table_ranking <- data.frame(matrix(table_ranking,byrow = T,ncol=length(index)))
+          names(table_ranking)<-index;Sys.sleep(0.5)
+          table_ranking<-cbind(table_ranking,j,k);Sys.sleep(0.5)
+          bat[[i]]<-rbind(bat[[i]],table_ranking)
+          table_ranking<-c()
+          Sys.sleep(1)
+        }
+        else{
+          for(m in 2:(length(page_num_k)-1)){Sys.sleep(1)
+            page_select<-remDr$findElement(using="css selector", value=paste('#',xml_attrs(page_num_k[[m]])[["id"]],sep='')) ;  
+            page_select$clickElement();Sys.sleep(3)
+            table_html<-remDr$getPageSource()[[1]]
+            table_html<-read_html(table_html);Sys.sleep(0.5)
+            table_ranking <- table_html %>% html_nodes("div.record_result > table") %>%html_nodes('tbody') %>%html_nodes('td') %>%   html_text();    Sys.sleep(1)
+            table_ranking <- data.frame(matrix(table_ranking,byrow = T,ncol=length(index)))
+            names(table_ranking)<-index ;Sys.sleep(0.5)
+            table_ranking<-cbind(table_ranking,j,k);Sys.sleep(0.5)
+            bat[[i]]<-rbind(bat[[i]],table_ranking)
+            table_ranking<-c()
+            Sys.sleep(1)
+          }}
+      }
+    }
+  }
+}
+```
+
+
+##**8) 스탯티즈 변수들간의 상관관계**
+
+```{r}
+js <-  dplyr::select(stat,year,WPA, babip, WAR, wRC, AVG, SLG,OBP, OPS)
+head(js)
+
+js1 <- na.omit(js)
+js1 <- js1 %>% mutate(iso_pow = SLG-AVG, iso_obp = OBP-AVG)
+cor(js1$babip,js1$AVG)
+cor(js1$babip,js1$OBP)
+cor(js1$babip,js1$SLG)
+cor(js1$babip,js1$iso_pow)
+cor(js1$babip,js1$iso_obp)
+cor(js1$babip,js1$OPS)
+```
+
+```{r }
+
+ggplot(data = js1, aes(x=babip,y=AVG)) + geom_point()
+ggplot(data = js1, aes(x=babip,y=SLG)) + geom_point()
+ggplot(data = js1, aes(x=babip,y=OBP)) + geom_point()
+ggplot(data = js1, aes(x=babip,y=iso_pow)) + geom_point()
+ggplot(data = js1, aes(x=babip,y=iso_obp)) + geom_point()
+ggplot(data = js1, aes(x=babip,y=OPS)) + geom_point()
+
+cor(js1$WPA,js1$AVG)
+cor(js1$WPA,js1$SLG)
+cor(js1$WPA,js1$OBP)
+cor(js1$WPA,js1$iso_pow)
+cor(js1$WPA,js1$iso_obp)
+cor(js1$WPA,js1$OPS)
+
+ggplot(data = js1, aes(x=WPA,y=AVG)) + geom_point()
+ggplot(data = js1, aes(x=WPA,y=SLG)) + geom_point()
+ggplot(data = js1, aes(x=WPA,y=OBP)) + geom_point()
+ggplot(data = js1, aes(x=WPA,y=iso_pow)) + geom_point()
+ggplot(data = js1, aes(x=WPA,y=iso_obp)) + geom_point()
+ggplot(data = js1, aes(x=WPA,y=OPS)) + geom_point()
+
+```
+
+###**결과**
+데이콘에서 제공한 데이터인  
+<center>**Regular_Season_Batter**</center>  
+<center>**Regular_Season_Batter_Day_by_Day**</center>  
+<center>**Pre_Season_Batter**</center>  
+
+에 변수들이 조금 부족하다고 생각했고 
+이후 우리가 제출해야할 값인 OPS에 사용되는 OBP와 SLG를 예측하는데 도움이 되는 값들을 구해보기 위해
+ 스탯티즈라는 사설 사이트를 크롤링 하여 선수들의 능력을 수치화 할수 있는 값들을 뽑아왔다.
+
+하지만 결국
+$$BABIP=\dfrac{(총 안타수-홈런)}{(타수-삼진-홈런+희생플라이)}$$
+
+$$wRC+=(\dfrac{{\dfrac{wRAA}{타석}}}{{\dfrac{리그 득점}{리그 타석}}}+1)×100×파크팩터$$
+
+$$WAR=대체 수준 선수 대비 승리 기여도$$
+
+$$WPA=승리 확률 기여도$$
+
+$$OPS=SLG(장타율)+OBP(출루율)$$
+
+
+
+ babip, wRC , WAR, WPA
+ 와 같은 식들에는 선수들의 가치를 평가하는데 좋은 지표지만 이러한 지표들의 계산과정을 자세히 살펴보면 기본적인 타석, 볼넷, 안타 등의 수치를 재조합하여 만든 변수로 AVG SLG OBP 만으로 충분히 설명할 수 있다고 판단된다.  
+ 또한 파크팩터, wRAA, wOBA 등 복잡한 수식들을 사용할 필요성이 없다고 판단된다.  
+ 따라서 기존에 있는 자료를 최대한 활용하는 방식으로 방향을 잡음  
+
+
+# **2. Visualization**
+
+##**선수별 성적의 변화(시즌 별 vs 누적 일별)**
+
+###**1) 누적 일별**
+
+```{r }
+regular_season_dbd%>%group_by(batter_id)%>%summarise(n=n())%>%arrange(desc(n))
+check_day<-regular_season_dbd%>%filter(batter_id==19)%>%select(batter_id,batter_name,year,date,AB,H,X2B,X3B,HR,BB,HBP,avg2,year)
+check_day_final<-c()
+
+for(i in 1:nrow(check_day)){
+  cum.data<-check_day[1:i,]%>%group_by(batter_id)%>%summarize(total_AB=sum(AB),
+                                                             total_H=sum(H),
+                                                             total_X2B=sum(X2B),
+                                                             total_X3B=sum(X3B),
+                                                             total_HR=sum(HR),
+                                                             total_BB=sum(BB),
+                                                             total_HBP=sum(HBP))%>%group_by(batter_id)%>%
+    mutate(AVG=total_H/total_AB,SLG=(total_H-total_X2B-total_X3B-total_HR+total_X2B*2+total_X3B*3+total_HR*4)/total_AB,OBP=(total_H+total_BB+total_HBP)/(total_AB+total_BB+total_HBP),index=i,year = check_day[i,"year"])%>%
+    select(batter_id,total_AB,AVG,SLG,OBP,index,total_AB,year)
+  check_day_final<-rbind(check_day_final,cum.data)
+}
+
+
+```
+
+```{r}
+## ops avg iso_pow iso_obp
+check_day_final <- check_day_final %>% mutate(OPS=SLG+OBP,ISO_pow = SLG-AVG,ISO_obp = OBP-AVG)
+
+
+```
+
+
+
+```{r }
+
+
+check_day_final <- check_day_final %>% mutate(OPS=SLG+OBP,ISO_pow = SLG-AVG,ISO_obp = OBP-AVG)
+check_day_final <- check_day_final[-1,]
+
+fff_2017 <- check_day_final %>% filter(year==2017)
+
+ggplot(data=check_day_final, aes(x=index,y=OPS))+geom_line() + ggtitle("2017")+
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2017[nrow(fff_2017),"OPS"]),color="red")
+
+ggplot(data=check_day_final, aes(x=index,y=AVG),color="red")+geom_line(color="red")+ggtitle("2017")+
+  geom_line(aes(y=ISO_pow),color="blue")+
+  geom_line(aes(y=ISO_obp),color="green")+ 
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2017[nrow(fff_2017),"AVG"]))+ 
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2017[nrow(fff_2017),"ISO_pow"]))+ 
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2017[nrow(fff_2017),"ISO_obp"]))
+
+fff_2018 <- check_day_final %>% filter(year==2018)
+
+ggplot(data=check_day_final, aes(x=index,y=OPS))+geom_line() + ggtitle("2018")+
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2018[nrow(fff_2018),"OPS"]),color="red")
+
+ggplot(data=check_day_final, aes(x=index,y=AVG),color="red")+geom_line(color="red")+ ggtitle("2018")+
+  geom_line(aes(y=ISO_pow),color="blue")+
+  geom_line(aes(y=ISO_obp),color="green")+ 
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2018[nrow(fff_2018),"AVG"]))+ 
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2018[nrow(fff_2018),"ISO_pow"]))+ 
+  geom_hline(data=check_day_final, yintercept = as.numeric(fff_2018[nrow(fff_2018),"ISO_obp"]))
+```
+
+
+### **2) 시즌별** 
+```{r}
+
+check_dbd <- regular_season_dbd %>% filter(batter_id == 19) %>% group_by(batter_id,year)  %>% 
+  select(batter_id,year,batter_name,year,date,AB,H,X2B,X3B,HR,BB,HBP,avg2)
+
+check_dbd_final<-c()
+k <- 0
+for(j in unique(check_dbd$year) ){
+  check_f <- check_dbd %>% filter(year==j)
+  k <- k+1
+  for(i in 1:nrow(check_f)){
+  cum.data<-check_f[1:i,]%>%group_by(batter_id,year)%>%summarise(total_AB=sum(AB),
+                                                              total_H=sum(H),
+                                                              total_X2B=sum(X2B),
+                                                              total_X3B=sum(X3B),
+                                                              total_HR=sum(HR),
+                                                              total_BB=sum(BB),
+                                                              total_HBP=sum(HBP))%>%group_by(batter_id,year)%>%
+    mutate(AVG=total_H/total_AB,SLG=(total_H-total_X2B-total_X3B-total_HR+total_X2B*2+total_X3B*3+total_HR*4)/total_AB,OBP=(total_H+total_BB+total_HBP)/(total_AB+total_BB+total_HBP),check=k)%>%
+    select(batter_id,year,total_AB,AVG,SLG,OBP,total_AB,check)
+  check_dbd_final <- rbind(check_dbd_final,cum.data)
+  }
+}
+
+
+############### 2017
+check_dbd_final <- check_dbd_final %>% mutate(OPS=SLG+OBP,ISO_pow = SLG-AVG,ISO_obp = OBP-AVG)
+check_dbd_final <- cbind(check_dbd_final,index=1:nrow(check_dbd_final))
+check_dbd_final$check <- as.factor(check_dbd_final$check)
+
+ggplot(data=check_dbd_final, aes(x=index,y=AVG,color=check))+geom_line() + geom_hline(data=fff_2017, yintercept = as.numeric(fff_2017[nrow(fff_2017),"AVG"]),color="red")+ ggtitle("2017")
+
+ggplot(data=check_dbd_final, aes(x=index,y=ISO_pow,color=check))+geom_line() + geom_hline(data=fff_2017, yintercept = as.numeric(fff_2017[nrow(fff_2017),"ISO_pow"]),color="red")+ ggtitle("2017")
+
+ggplot(data=check_dbd_final, aes(x=index,y=ISO_obp,color=check))+geom_line() + geom_hline(data=fff_2017, yintercept = as.numeric(fff_2017[nrow(fff_2017),"ISO_obp"]),color="red")+ ggtitle("2017")
+
+ggplot(data=check_dbd_final, aes(x=index,y=OPS,color=check))+geom_line() + geom_hline(data=fff_2017, yintercept = as.numeric(fff_2017[nrow(fff_2017),"OPS"]),color="red") + ggtitle("2017")
+
+############### 2018
+
+ggplot(data=check_dbd_final, aes(x=index,y=AVG,color=check))+geom_line() + geom_hline(data=fff_2018, yintercept = as.numeric(fff_2018[nrow(fff_2018),"AVG"]),color="red")+ ggtitle("2018")
+
+ggplot(data=check_dbd_final, aes(x=index,y=ISO_pow,color=check))+geom_line() + geom_hline(data=fff_2018, yintercept = as.numeric(fff_2018[nrow(fff_2018),"ISO_pow"]),color="red")+ ggtitle("2018")
+
+ggplot(data=check_dbd_final, aes(x=index,y=ISO_obp,color=check))+geom_line() + geom_hline(data=fff_2018, yintercept = as.numeric(fff_2018[nrow(fff_2018),"ISO_obp"]),color="red")+ ggtitle("2018")
+
+ggplot(data=check_dbd_final, aes(x=index,y=OPS,color=check))+geom_line() + geom_hline(data=fff_2018, yintercept = as.numeric(fff_2018[nrow(fff_2018),"OPS"]),color="red")+ ggtitle("2018")
+```
+##결과
+**본 그래프에서 표시된 직선은 선수의 누적 성적을 의미한다.**  
+**그래프를 확인해 보았을 때 선수의 누적 성적은 시즌이 흐름에 따라 큰 변화가 생기지 않으며 선수의 누적기록을 기준으로 시즌마다 약간의 변동이 있는 형태임을 확인 할 수 있다.**  
+**따라서 변동성이 적은 새로운 지표로 선수의 누적기록(cum_data)을 사용하기로 한다.**
+
+
+
+# **3. Feature Engineering**
+
+
+## **클러스터링(k-means) (시즌 별 vs 누적 일별) **
+```{r}
+
+stat4<-stat[,c(1:3,5:7,24:26,28,32:34,38:40,81:88,91,94,104:105,108,119:120,134:135,157,192:199,224:229)]
+for(i in 4:ncol(stat4)){
+  stat4[,i]<-as.numeric(stat4[,i])
+}
+stat5<-stat4
+stat5$PA.G<-stat5$PA/stat5$G
+
+appear.data<-stat5[,c(1:6,49)]
+```
+
+
+
+##**1) 출장기록을 바탕으로 클러스터링**
+###**2014년**
+```{r}
+###2014년
+appear.data_2014<-appear.data%>%filter(year==2014)
+appear.data_2014_2<-na.omit(appear.data_2014)
+appear.data_2014_2[,4:7]<-scale((appear.data_2014_2[,4:7]))
+
+set.seed(1234)
+appear_2014<-kmeans(appear.data_2014_2[4:7],4)
+stars(appear_2014$centers)
+appear_result_2014<-cbind(appear.data_2014[,2:7],appear_2014$cluster)
+str(appear_result_2014)
+names(appear_result_2014)[7]<-'cluster'
+appear_result_2014$group=0
+appear_result_2014$group[appear_result_2014$cluster==1]='주전'
+appear_result_2014$group[appear_result_2014$cluster==2]='교체'
+appear_result_2014$group[appear_result_2014$cluster==4]='서브'
+appear_result_2014$group[appear_result_2014$cluster==3]='2군'
+
+appear_result_2014<-left_join(appear.data_2014[,1:3],appear_result_2014[,-3])
+
+```
+
+
+###**2015년**
+```{r}
+appear.data_2015<-appear.data%>%filter(year==2015)
+appear.data_2015_2<-na.omit(appear.data_2015)
+appear.data_2015_2[,4:7]<-scale((appear.data_2015_2[,4:7]))
+
+set.seed(1234)
+appear_2015<-kmeans(appear.data_2015_2[4:7],4)
+stars(appear_2015$centers)
+appear_result_2015<-cbind(appear.data_2015[,2:7],appear_2015$cluster)
+str(appear_result_2015)
+names(appear_result_2015)[7]<-'cluster'
+appear_result_2015$group=0
+appear_result_2015$group[appear_result_2015$cluster==1]='주전'
+appear_result_2015$group[appear_result_2015$cluster==4]='교체'
+appear_result_2015$group[appear_result_2015$cluster==3]='서브'
+appear_result_2015$group[appear_result_2015$cluster==2]='2군'
+head(appear_result_2015)
+appear_result_2015<-left_join(appear.data_2015[,1:3],appear_result_2015[,-3])
+```
+###**2016년**
+```{r}
+appear.data_2016<-appear.data%>%filter(year==2016)
+appear.data_2016_2<-na.omit(appear.data_2016)
+appear.data_2016_2[,4:7]<-scale((appear.data_2016_2[,4:7]))
+
+set.seed(1234)
+appear_2016<-kmeans(appear.data_2016_2[4:7],4)
+stars(appear_2016$centers)
+appear_result_2016<-cbind(appear.data_2016[,2:7],appear_2016$cluster)
+str(appear_result_2016)
+names(appear_result_2016)[7]<-'cluster'
+appear_result_2016$group=0
+appear_result_2016$group[appear_result_2016$cluster==1]='주전'
+appear_result_2016$group[appear_result_2016$cluster==4]='교체'
+appear_result_2016$group[appear_result_2016$cluster==3]='서브'
+appear_result_2016$group[appear_result_2016$cluster==2]='2군'
+head(appear_result_2016)
+appear_result_2016<-left_join(appear.data_2016[,1:3],appear_result_2016[,-3])
+```
+
+###**2017년**
+```{r}
+appear.data_2017<-appear.data%>%filter(year==2017)
+appear.data_2017_2<-na.omit(appear.data_2017)
+appear.data_2017_2[,4:7]<-scale((appear.data_2017_2[,4:7]))
+
+set.seed(1234)
+appear_2017<-kmeans(appear.data_2017_2[4:7],4)
+stars(appear_2017$centers)
+appear_result_2017<-cbind(appear.data_2017[,2:7],appear_2017$cluster)
+str(appear_result_2017)
+names(appear_result_2017)[7]<-'cluster'
+appear_result_2017$group=0
+appear_result_2017$group[appear_result_2017$cluster==1]='주전'
+appear_result_2017$group[appear_result_2017$cluster==4]='교체'
+appear_result_2017$group[appear_result_2017$cluster==3]='서브'
+appear_result_2017$group[appear_result_2017$cluster==2]='2군'
+head(appear_result_2017)
+appear_result_2017<-left_join(appear.data_2017[,1:3],appear_result_2017[,-3])
+```
+
+###**2018년**
+```{r}
+appear.data_2018<-appear.data%>%filter(year==2018)
+appear.data_2018_2<-na.omit(appear.data_2018)
+appear.data_2018_2[,4:7]<-scale((appear.data_2018_2[,4:7]))
+
+set.seed(1234)
+appear_2018<-kmeans(appear.data_2018_2[4:7],4)
+stars(appear_2018$centers)
+appear_result_2018<-cbind(appear.data_2018[,2:7],appear_2018$cluster)
+str(appear_result_2018)
+names(appear_result_2018)[7]<-'cluster'
+appear_result_2018$group=0
+appear_result_2018$group[appear_result_2018$cluster==1]='주전'
+appear_result_2018$group[appear_result_2018$cluster==4]='교체'
+appear_result_2018$group[appear_result_2018$cluster==3]='서브'
+appear_result_2018$group[appear_result_2018$cluster==2]='2군'
+head(appear_result_2018)
+appear_result_2018<-left_join(appear.data_2018[,1:3],appear_result_2018[,-3])
+
+
+
+```
+
+##**2) 성적을 바탕으로한 클러스터링**
+```{r}
+score_data<-stat5%>%select(year,이름,팀,AVG,OBP,SLG)
+
+###2014년
+kmeans.data_2014_score<-score_data%>%filter(year==2014)
+kmeans.data_2014_score[is.na(kmeans.data_2014_score)]<-0
+kmeans.data_2014_score_2<-kmeans.data_2014_score
+kmeans.data_2014_score_2[,4:6]<-scale(kmeans.data_2014_score_2[,4:6])
+
+set.seed(1234)
+kmeans.2014_score<-kmeans(kmeans.data_2014_score_2[,4:6],5)
+kmeans.2014_score$cluster
+stars(kmeans.2014_score$centers)
+result_2014_score<-cbind(kmeans.data_2014_score_2[,2:3],kmeans.2014_score$cluster)
+names(result_2014_score)[3]='cluster'
+result_2014_score$group=0
+result_2014_score$group[result_2014_score$cluster==2]='보류'
+result_2014_score$group[result_2014_score$cluster==1]='주전'
+result_2014_score$group[result_2014_score$cluster==4]='교체'
+result_2014_score$group[result_2014_score$cluster==5]='2군'
+result_2014_score$group[result_2014_score$cluster==3]='서브'
+
+result_2014_score<-left_join(kmeans.data_2014_score[,1:3],result_2014_score[,-3])
+
+```
+###** 2014-2018 모두 같은 과정으로 진행하였으며 자세한 코드는 스크립트에 포함되어 있습니다. **
+
+
+##**3) 전처리 및 변수생성**
+
+###**외국인 선수 추출**
+```{r}
+
+
+
+regular_season$korean.<-str_detect(regular_season$career,'초')
+regular_season$korean.<-as.numeric(regular_season$korean.)
+
+```
+###**년차 변수 생성**
+
+```{r}
+regular_season<-regular_season%>%group_by(batter_id)%>%mutate(년차=1:n())
+year_count<-regular_season%>%select(batter_name,year,년차, korean.)
+names(year_count)<-c('batter_id','batter_name','year','년차','korean.')
+year_count
+
+
+
+head(result_2014_score)
+head(appear_result_2014)
+```
+
+
+
+```{r}
+names(result_2014_score)[4]= 'score_group'
+names(appear_result_2014)[8]= 'game_group'
+
+head(stat5)
+head(stat5[,c(1:9,49)])
+
+```
+
+```{r}
+
+
+group_2014<-full_join(result_2014_score, appear_result_2014)
+nrow(group_2014)
+nrow(stat5[,c(1:9,49)])
+
+
+group_data<-left_join(stat5[,c(1:9,49)],group_2014)
+
+head(group_data)
+
+head(group_data%>%filter(score_group=='보류'))
+
+group_data$score_group_2<-group_data$score_group
+group_data$score_group_2[group_data$score_group=='보류'& group_data$game_group %in% c('주전','교체')]<-'주전'
+group_data$score_group_2[group_data$score_group=='보류'& group_data$game_group %in% c('서브')]<-'서브'
+group_data$score_group_2[group_data$score_group=='보류'& group_data$game_group %in% c('2군')]<-'2군'
+
+
+group_data_2<-group_data[,-11]
+group_data_2<-group_data_2[,-11]
+
+
+head(group_data)
+
+head(group_data_2)
+
+
+
+group_data<-fread('C:/Users/kitae/Desktop/공모전/group_data.csv',encoding='UTF-8')%>%data.frame()
+
+head(group_data)
+
+```
+
+
+### **집단 별로 평균 AB(타석수)를 시각**
+```{r}
+
+ggplot(data=group_data, aes(x=game_group,y=AB))+geom_boxplot()+geom_hline(yintercept=100,color="red",cex=1)
+
+```
+##결과
+**group_data의 경기 출장 기록을 바탕으로 클러스터링을 진행한 결과로 각 그룹별 타수를 boxplot을 통해 확인해 보았다.**  
+**빨간 선은 타수=100인 선이다.**  
+**확인 결과 2군 으로 분류된 선수들의 경우 대다수 1시즌당 100타수 미만이며, 서브 로 분류된 선수 역시 대다수가 100타수 미만임을 확인 할 수 있다.**  
+**즉 기록이 부족한 선수들의 대부분은 1시즌당 100타수 미만으로 발생한다.**  
+**따라서 최근 3개년의 타수의 누적 합이 300미만인 경우 대체 선수 급으로 분류하여 모델에 활용한다.**  
+
+
+
+#**4.Model Building**
+##**1) 모형 생성을 위한 데이터 생성**
+```{r}
+
+##전처리
+##1차적으로 AB가 0이기 때문에 AVG, SLG 가 NA로 확인된 관측치의 AVG와 SLG를 0으로 바꿔준다
+regular_season[regular_season$AB==0&is.na(regular_season$avg),c(5,21)]<-0
+regular_season[regular_season$AB==0&is.na(regular_season$OBP),c(22)]<-0
+
+##외국인 선수 구분 변수 생성
+regular_season$korean.<-str_detect(regular_season$career,'초')
+regular_season$korean.<-as.numeric(regular_season$korean.)
+
+##년차 변수 생성
+regular_season<-regular_season%>%group_by(batter_id)%>%mutate(년차=1:n())%>%data.frame()
+year_count<-regular_season%>%select(batter_id,batter_name,year,년차,korean.)
+names(year_count)<-c('batter_id','이름','year','년차','korean.')
+
+##앞에서 생성한 클러스터링 데이터 불러오기
+group_data<-fread('C:/Users/kitae/Desktop/공모전/group_data.csv',encoding='UTF-8')%>%data.frame()
+game_data<-inner_join(group_data[,c(1,2,4,6,11)],year_count,by=c('이름'='이름','year'='year'))%>%data.frame()
+game_data%>%head()
+#boxplot(game_data$AB~game_data$game_group)
+
+##순수 장타율(ISO_p)와 순수 출루율(ISO_o)를 생성한 데이터 생성
+baseball<-regular_season%>%mutate(ISO_p=SLG-avg,ISO_o=OBP-avg)%>%select(batter_id,batter_name,year,avg,AB,ISO_p,ISO_o,SLG,OBP,년차)%>%data.frame()
+
+##모형 생성을 위한 데이터 생성
+cum_record<-regular_season%>%group_by(batter_id,batter_name)%>%filter(max(year)==2018)%>%
+  summarise(avg.tot=weighted.mean(avg,AB),SLG=weighted.mean(SLG,AB),OBP=weighted.mean(OBP,(AB+BB+HBP)),total_AB=sum(AB))%>%
+  mutate(ISO_p.tot=SLG-avg.tot,ISO_o.tot=OBP-avg.tot)%>%select(batter_id,batter_name,total_AB,avg.tot,ISO_p.tot,ISO_o.tot)%>%data.frame()
+
+final_data<- reshape(baseball%>%filter(year>=2014)%>%select(batter_id,batter_name,year,AB,avg,ISO_p,ISO_o)%>%arrange(desc(year)), v.names = c('AB','avg','ISO_p','ISO_o'), idvar = "batter_id",
+                     timevar = "year", direction = "wide")
+
+final_data_matrix<-matrix(nrow=nrow(final_data),ncol=ncol(final_data))%>%data.frame()
+final_data_matrix[,1:2]<-final_data[,1:2]
+for(i in 1:nrow(final_data)){
+  for(j in seq(3,22,4)){ 
+    if(is.na(final_data[i,j])==F&is.na(final_data_matrix[i,3])==T){
+      final_data_matrix[i,3:6]<-(final_data[i,j:(j+3)])
+    }
+    else if(is.na(final_data[i,j])==F&is.na(final_data_matrix[i,3])==F&is.na(final_data_matrix[i,7])==T){
+      final_data_matrix[i,7:10]<-(final_data[i,j:(j+3)])
+    }
+    else if(is.na(final_data[i,j])==F&is.na(final_data_matrix[i,3])==F&is.na(final_data_matrix[i,7])==F&is.na(final_data_matrix[i,11])==T){
+      final_data_matrix[i,11:14]<-(final_data[i,j:(j+3)])
+    }
+    else if(is.na(final_data[i,j])==F&is.na(final_data_matrix[i,3])==F&is.na(final_data_matrix[i,7])==F&is.na(final_data_matrix[i,11])==F&is.na(final_data_matrix[i,15])==T){
+      final_data_matrix[i,15:18]<-(final_data[i,j:(j+3)])
+    }
+    else if(is.na(final_data[i,j])==F&is.na(final_data_matrix[i,3])==F&is.na(final_data_matrix[i,7])==F&is.na(final_data_matrix[i,11])==F&is.na(final_data_matrix[i,15])==F&is.na(final_data_matrix[i,19])==T){
+      final_data_matrix[i,19:22]<-(final_data[i,j:(j+3)])
+    }
+    else if(is.na(final_data[i,j])==T){
+      next
+    }
+  }
+}
+names(final_data_matrix)<-gsub('2018','1',names(final_data))
+names(final_data_matrix)<-gsub('2017','2',names(final_data_matrix))
+names(final_data_matrix)<-gsub('2016','3',names(final_data_matrix))
+names(final_data_matrix)<-gsub('2015','4',names(final_data_matrix))
+names(final_data_matrix)<-gsub('2014','5',names(final_data_matrix))
+
+good_rookie_2019<-game_data%>%group_by(batter_id)%>%filter(년차<=3 & game_group %in% c('주전')&korean.==1 )%>%data.frame()
+
+rookie_data_2019<-inner_join(baseball,good_rookie_2019[,c(1,6,7)],by=c('batter_id'='batter_id',
+                                                                       'year'='year','년차'='년차'))
+
+rookie_id_2019<-(good_rookie_2019%>%select(batter_id)%>%unique())%>%data.frame()
+
+rookie_data_2019_sub<-rookie_data_2019%>%group_by(year)%>%summarise(이름='주전급신인',
+                                                                      AB_total=sum(AB)/n(),
+                                                                      avg=weighted.mean(avg,AB,na.rm=T),
+                                                                      ISO_p=weighted.mean(SLG-avg,AB,na.rm=T),
+                                                                      ISO_o=weighted.mean(OBP-avg,AB,na.rm=T),
+                                                                      년차=mean(년차))%>%data.frame()
+
+rookie_data_matrix_2019<-reshape(rookie_data_2019_sub%>%arrange(desc(year))%>%select(-년차),v.names = c('AB_total','avg','ISO_p','ISO_o'), idvar = '이름',
+                                 timevar = "year", direction = "wide")
+
+rookie<-(rookie_data_matrix_2019)
+names(rookie)<-gsub('2018','1',names(rookie))
+names(rookie)<-gsub('2017','2',names(rookie))
+names(rookie)<-gsub('2016','3',names(rookie))
+names(rookie)<-gsub('2015','4',names(rookie))
+names(rookie)<-gsub('2014','5',names(rookie))
+
+foreign.data_2019<-regular_season%>%filter(korean.==0)%>%group_by(batter_id)%>%filter(max(년차)>1)%>%group_by(year)%>%
+  dplyr::summarise(이름='외국인선수',
+                     AB_total=sum(AB,na.rm=T)/n(),
+                     avg=weighted.mean(avg,AB,na.rm=T),
+                     ISO_p=weighted.mean(SLG-avg,AB,na.rm=T),
+                     ISO_o=weighted.mean(OBP-avg,AB,na.rm=T),
+                     년차=mean(년차))%>%data.frame()
+
+foreign_data_matrix_2019<-reshape(data.frame(foreign.data_2019)%>%arrange(desc(year))%>%select(-년차),v.names = c('AB_total','avg','ISO_p','ISO_o'), idvar = '이름',
+                             timevar = "year", direction = "wide")
+
+foreign_name<-regular_season %>%group_by(batter_id)%>% 
+  filter(korean.==0)%>%select(batter_id,batter_name)%>%unique()%>%
+  data.frame()
+
+names(foreign_data_matrix_2019)<-names(rookie)
+
+data<-final_data_matrix%>%select(-AB.5,-avg.5,-ISO_p.5,-ISO_o.5,-AB.4,-avg.4,-ISO_p.4,-ISO_o.4)
+data<-data%>%group_by(batter_id)%>%mutate(AB_total=sum(AB.1,na.rm=T)+sum(AB.2,na.rm=T)+sum(AB.3,na.rm=T))%>%data.frame()
+data<-inner_join(data,cum_record)
+
+data[data$batter_id %in% rookie_id_2019[,1],]
+data[data$batter_id %in% rookie_id_2019[,1] & is.na(data$AB.2),(which(names(data)=='AB.2')):(which(names(data)=='ISO_o.3'))]<-(rookie%>%select(AB_total.2:ISO_o.3))
+data[data$batter_id %in% rookie_id_2019[,1] & is.na(data$AB.3),(which(names(data)=='AB.3')):(which(names(data)=='ISO_o.3'))]<-(rookie%>%select(AB_total.3:ISO_o.3))
+
+data[data$batter_id %in% foreign_name[,1],]
+foreign_data_matrix_2019%>%select(AB_total.2:ISO_o.3)
+
+
+data[data$batter_id %in% foreign_name[,1]&is.na(data$AB.2),(which(names(data)=='AB.2')):(which(names(data)=='ISO_o.3'))]<-(foreign_data_matrix_2019%>%select(AB_total.2:ISO_o.3))
+
+data[data$batter_id %in% foreign_name[,1]&is.na(data$AB.3),(which(names(data)=='AB.3')):(which(names(data)=='ISO_o.3'))]<-(foreign_data_matrix_2019%>%select(AB_total.3:ISO_o.3))
+
+
+```
+
+
+```{r}
+readr::write_excel_csv(data,'C:/Users/kitae/Desktop/공모전/final_data.csv')
+
+data<-fread('C:/Users/kitae/Desktop/공모전/final_data.csv',encoding='UTF-8')%>%data.frame()
+```
+
+
+##**2) 2018년 예측해보기**
+
+##**2018년에 2년차 이상(선수의 성적을 예측할 수 있는)선수 확인**
+
+```{r}
+player_2018<-regular_season%>%group_by(batter_id,batter_name)%>%
+  filter(year==2018&년차>1)%>%select(batter_id,batter_name)%>%unique()
+```
+
+##**2017년까지 누적 기록 생성**
+
+```{r}
+cum_record_2018<-regular_season%>%group_by(batter_id,batter_name)%>%
+  group_by(batter_id,batter_name)%>%filter(year<=2017)%>%summarise(total_AB=sum(AB),
+                                                                   total_H=sum(H),
+                                                                   total_X2B=sum(X2B),
+                                                                   total_X3B=sum(X3B),
+                                                                   total_HR=sum(HR),
+                                                                   total_BB=sum(BB),
+                                                                   total_HBP=sum(HBP)
+  )%>%
+  group_by(batter_id)%>%
+  mutate(avg.tot=total_H/total_AB,SLG=(total_H-total_X2B-total_X3B-total_HR+total_X2B*2+total_X3B*3+total_HR*4)/total_AB,OBP=(total_H+total_BB+total_HBP)/(total_AB+total_BB+total_HBP))%>%
+  mutate(ISO_p.tot=SLG-avg.tot,ISO_o.tot=OBP-avg.tot)%>%select(batter_id,batter_name,total_AB,avg.tot,ISO_p.tot,ISO_o.tot)%>%data.frame()
+
+```
+##**2018년 예측 데이터 생성**
+
+```{r}
+final_data_2018<- reshape(baseball%>%filter(year>=2014&year<2018)%>%select(batter_id,batter_name,year,AB,avg,ISO_p,ISO_o)%>%arrange(desc(year)), v.names = c('AB','avg','ISO_p','ISO_o'), idvar = "batter_id",
+                     timevar = "year", direction = "wide")
+
+final_data_matrix_2018<-matrix(nrow=nrow(final_data_2018),ncol=ncol(final_data_2018))%>%data.frame()
+final_data_matrix_2018[,1:2]<-final_data_2018[,1:2]
+for(i in 1:nrow(final_data_2018)){
+  for(j in seq(3,18,4)){ 
+    if(is.na(final_data_2018[i,j])==F&is.na(final_data_matrix_2018[i,3])==T){
+      final_data_matrix_2018[i,3:6]<-(final_data_2018[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2018[i,j])==F&is.na(final_data_matrix_2018[i,3])==F&is.na(final_data_matrix_2018[i,7])==T){
+      final_data_matrix_2018[i,7:10]<-(final_data_2018[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2018[i,j])==F&is.na(final_data_matrix_2018[i,3])==F&is.na(final_data_matrix_2018[i,7])==F&is.na(final_data_matrix_2018[i,11])==T){
+      final_data_matrix_2018[i,11:14]<-(final_data_2018[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2018[i,j])==F&is.na(final_data_matrix_2018[i,3])==F&is.na(final_data_matrix_2018[i,7])==F&is.na(final_data_matrix_2018[i,11])==F&is.na(final_data_matrix_2018[i,15])==T){
+      final_data_matrix_2018[i,15:18]<-(final_data_2018[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2018[i,j])==T){
+      next
+    }
+  }
+}
+names(final_data_matrix_2018)<-gsub('2017','2',names(final_data_2018))
+names(final_data_matrix_2018)<-gsub('2016','3',names(final_data_matrix_2018))
+names(final_data_matrix_2018)<-gsub('2015','4',names(final_data_matrix_2018))
+names(final_data_matrix_2018)<-gsub('2014','5',names(final_data_matrix_2018))
+
+final_data_matrix_2018_check<-final_data_matrix_2018%>%select(-AB.5,-avg.5,-ISO_p.5,-ISO_o.5)
+final_data_matrix_2018_check<-final_data_matrix_2018_check%>%group_by(batter_id)%>%mutate(AB_total=sum(AB.2,na.rm=T)+sum(AB.3,na.rm=T)+sum(AB.4,na.rm=T))%>%data.frame()
+final_data_matrix_2018_check<-left_join(final_data_matrix_2018_check,cum_record_2018)
+##결국에는 잘하는 신인이나
+##재계약한 외국인들의 평균이 우리가 위에서 추출한 선수들의 기록과 크게 다르지 않다.
+
+#주전급 신인선수 추출
+good_rookie_2018<-game_data%>%group_by(batter_id)%>%
+filter(batter_id %in% player_2018$batter_id &년차<4 &game_group %in% c('주전') & year<2018&korean.==1)%>%data.frame()
+
+rookie_data_2018<-inner_join(baseball,good_rookie_2018[,c(1,6,7)],by=c('batter_id'='batter_id',
+                                                             'year'='year','년차'='년차'))
+
+rookie_id_2018<-rookie_data_2018%>%select(batter_id)%>%unique()%>%data.frame()
+
+rookie_data_sub_2018<-rookie_data_2018%>%group_by(year)%>%summarise(이름='주전급신인',
+AB_total=sum(AB)/n(),
+avg=weighted.mean(avg,AB,na.rm=T),
+ISO_p=weighted.mean(SLG-avg,AB,na.rm=T),
+ISO_o=weighted.mean(OBP-avg,AB,na.rm=T)
+)%>%data.frame()
+
+rookie_data_matrix_2018<-reshape(rookie_data_sub_2018%>%arrange(desc(year)),v.names = c('AB_total','avg','ISO_p','ISO_o'), idvar = '이름',
+                            timevar = "year", direction = "wide")
+
+rookie<-(rookie_data_matrix_2018)
+names(rookie)<-gsub('2017','2',names(rookie))
+names(rookie)<-gsub('2016','3',names(rookie))
+names(rookie)<-gsub('2015','4',names(rookie))
+names(rookie)<-gsub('2014','5',names(rookie))
+
+##2018년 예측대상 외국인 선수 데이터 생성
+foreign.data_2018<-regular_season%>%filter(korean.==0&year>=2014&year<2018)%>%group_by(batter_id)%>%filter(max(년차)>1)%>%group_by(year)%>%
+  dplyr::summarise(이름='외국인선수',
+                     AB_total=sum(AB,na.rm=T)/n(),
+                     avg=weighted.mean(avg,AB,na.rm=T),
+                     ISO_p=weighted.mean(SLG-avg,AB,na.rm=T),
+                     ISO_o=weighted.mean(OBP-avg,AB,na.rm=T)
+                     )%>%data.frame()
+
+foreign_data_matrix_2018<-reshape(data.frame(foreign.data_2018)%>%arrange(desc(year)),v.names = c('AB_total','avg','ISO_p','ISO_o'), idvar = '이름',
+                             timevar = "year", direction = "wide")
+
+foreign_id<-regular_season %>%group_by(batter_id)%>% 
+  filter(korean.==0)%>%select(batter_id,batter_name)%>%unique()%>%
+  data.frame()
+
+names(foreign_data_matrix_2018)<-names(rookie)
+```
+
+
+##**2018년 주전급 신인선수들 기록 대체**
+
+```{r}
+
+final_data_matrix_2018_check[final_data_matrix_2018_check$batter_id %in% rookie_id_2018[,1],]
+final_data_matrix_2018_check[final_data_matrix_2018_check$batter_id %in% rookie_id_2018[,1] & is.na(final_data_matrix_2018_check$AB.3),(which(names(final_data_matrix_2018_check)=='AB.3')):(which(names(final_data_matrix_2018_check)=='ISO_o.4'))]<-(rookie%>%select(AB_total.3:ISO_o.4))
+final_data_matrix_2018_check[final_data_matrix_2018_check$batter_id %in% rookie_id_2018[,1] & is.na(final_data_matrix_2018_check$AB.4),(which(names(final_data_matrix_2018_check)=='AB.4')):(which(names(final_data_matrix_2018_check)=='ISO_o.4'))]<-(rookie%>%select(AB_total.4:ISO_o.4))
+```
+
+##**2018년 외국인선수 기록 대체**
+
+```{r}
+final_data_matrix_2018_check[final_data_matrix_2018_check$batter_id %in% foreign_name[,1],]
+final_data_matrix_2018_check[final_data_matrix_2018_check$batter_id %in% foreign_name[,1]&is.na(final_data_matrix_2018_check$AB.3),(which(names(final_data_matrix_2018_check)=='AB.3')):(which(names(final_data_matrix_2018_check)=='ISO_o.4'))]<-(foreign_data_matrix_2018%>%select(AB_total.3:ISO_o.4))
+final_data_matrix_2018_check[final_data_matrix_2018_check$batter_id %in% foreign_name[,1]&is.na(final_data_matrix_2018_check$AB.4),(which(names(final_data_matrix_2018_check)=='AB.4')):(which(names(final_data_matrix_2018_check)=='ISO_o.4'))]<-(foreign_data_matrix_2018%>%select(AB_total.4:ISO_o.4))
+```
+
+##**2018 예측하기**
+```{r}
+
+
+RMSE_mat_2018<-(matrix(ncol=6))
+for(m in 1:5){
+  for(k in 2:6){
+    for(j in 3:7){
+      for(l in 1:10){
+        if((m+k)/(j+k+m+l)<0.25){
+          next
+        }
+      else {
+      weighted.matrix=(matrix(c(j,k,m,l),nrow=4))
+      for(i in seq(200,290,10)){
+        full_member_for_2018 <- (final_data_matrix_2018_check %>% filter(AB_total>=i|batter_id %in% foreign_name[,1]) %>% select(-AB_total,-batter_name) %>%as.matrix())
+        sub_member_for_2018 <- (final_data_matrix_2018_check %>% filter(AB_total<i&(batter_id %in% foreign_name[,1])==F) %>% select(-AB_total,-batter_name))
+        
+        replace_player_2018<-sub_member_for_2018%>%summarise(batter_id=999,
+                                                             AB_total_2=sum(AB.2,na.rm=T),  
+                                                             avg_total_2=weighted.mean(avg.2,AB.2,na.rm=T),
+                                                             ISO_pow_total_2=weighted.mean(ISO_p.2,AB.2,na.rm=T),
+                                                             ISO_obp_total_2=weighted.mean(ISO_o.2,AB.2,na.rm=T),
+                                                             
+                                                             AB_total_3=sum(AB.3,na.rm=T),  
+                                                             avg_total_3=weighted.mean(avg.3,AB.3,na.rm=T),
+                                                             ISO_pow_total_3=weighted.mean(ISO_p.3,AB.3,na.rm=T),
+                                                             ISO_obp_total_3=weighted.mean(ISO_o.3,AB.3,na.rm=T),
+                                                             
+                                                             AB_total_4=sum(AB.4,na.rm=T),  
+                                                             avg_total_4=weighted.mean(avg.4,AB.4,na.rm=T),
+                                                             ISO_pow_total_4=weighted.mean(ISO_p.4,AB.4,na.rm=T),
+                                                             ISO_obp_total_4=weighted.mean(ISO_o.4,AB.4,na.rm=T),
+                                                             
+                                                             AB_total_tot=sum(total_AB,na.rm=T),
+                                                             avg_total_tot=weighted.mean(avg.tot,total_AB,na.rm=T),
+                                                             ISO_pow_total_tot=weighted.mean(ISO_p.tot,total_AB,na.rm=T),
+                                                             ISO_obp_total_tot=weighted.mean(ISO_o.tot,total_AB,na.rm=T))%>%as.matrix()
+        
+        colnames(replace_player_2018)<-colnames(full_member_for_2018)  
+        
+        final_d_2018<-rbind(full_member_for_2018,replace_player_2018)%>%as.matrix()
+        final_d_2018_full<-final_d_2018[is.na(final_d_2018)%>%apply(1,sum)==0,]
+        final_d_2018_non<-final_d_2018[is.na(final_d_2018)%>%apply(1,sum)!=0,]
+        
+        ISO_pow_matrix<-(final_d_2018_full[,str_detect(colnames(final_d_2018_full),'ISO_p')])%*%weighted.matrix/sum(weighted.matrix)
+        ISO_obp_matrix<-(as.matrix(final_d_2018_full[,str_detect(colnames(final_d_2018_full),'ISO_o')])%*%weighted.matrix/sum(weighted.matrix))
+        avg_matrix<-(as.matrix(final_d_2018_full[,str_detect(colnames(final_d_2018_full),'avg')])%*%weighted.matrix/sum(weighted.matrix))
+        
+        OPS_pred<-(avg_matrix+avg_matrix+ISO_pow_matrix+ISO_obp_matrix)
+        
+        pred_sub<-cbind(sub_member_for_2018$batter_id,OPS_pred[nrow(OPS_pred),])%>%data.frame()
+        names(pred_sub)<-c('batter_id','OPS')
+        
+        pred_main<-cbind(final_d_2018_full[,1],OPS_pred)%>%data.frame()
+        pred_main<-pred_main[-nrow(pred_main),]
+        names(pred_main)<-c('batter_id','OPS')
+        
+        pred_fulltime<-bind_rows(pred_main,pred_sub)
+        
+        final_d_2018_non_4year<-final_d_2018_non
+        
+        pow_non_matrix<-(final_d_2018_non_4year[,str_detect(colnames(final_d_2018_non_4year),'ISO_p')])
+        pow_non_index<-pow_non_matrix%>%is.na()%>%apply(2,as.numeric)
+        pow_non_index<-((pow_non_index==0)%>%apply(2,as.numeric))
+        pow_non_matrix[is.na(pow_non_matrix)]<-0
+        ISO_pow_matrix_non<-(pow_non_matrix%*%weighted.matrix/(pow_non_index%*%weighted.matrix))
+        
+        obp_non_matrix<-(as.matrix(final_d_2018_non_4year[,str_detect(colnames(final_d_2018_non_4year),'ISO_o')]))
+        obp_non_index<-obp_non_matrix%>%is.na()%>%apply(2,as.numeric)
+        obp_non_index<-((obp_non_index==0)%>%apply(2,as.numeric))
+        obp_non_matrix[is.na(obp_non_matrix)]<-0
+        ISO_obp_matrix_non<-(obp_non_matrix%*%weighted.matrix/(obp_non_index%*%weighted.matrix))
+        
+        avg_non_matrix<-(as.matrix(final_d_2018_non_4year[,str_detect(colnames(final_d_2018_non_4year),'avg')]))
+        avg_non_index<-avg_non_matrix%>%is.na()%>%apply(2,as.numeric)
+        avg_non_index<-((avg_non_index==0)%>%apply(2,as.numeric))
+        avg_non_matrix[is.na(avg_non_matrix)]<-0
+        avg_matrix_non<-(avg_non_matrix%*%weighted.matrix/(avg_non_index%*%weighted.matrix))
+        
+        OPS_pred_non<-(avg_matrix_non+avg_matrix_non+ISO_pow_matrix_non+ISO_obp_matrix_non)
+        
+        pred_non<-cbind(final_d_2018_non_4year[,1],OPS_pred_non)
+        colnames(pred_non)<-c('batter_id','OPS')
+        
+        pred_full<-(rbind(pred_fulltime,pred_non)%>%arrange(batter_id)%>%data.frame())
+        real_ops<-regular_season%>%filter(year==2018)%>%select(batter_id,batter_name,OPS,AB)%>%data.frame()
+        names(real_ops)<-c('batter_id','batter_name','OPS_real','AB_real')
+        
+        pred_check<-inner_join(real_ops,pred_full,by=c('batter_id'='batter_id'))
+        pred_check<-pred_check%>%filter(batter_id %in% player_2018$batter_id)
+        
+        RMSE<-pred_check%>%na.omit()%>%with(sqrt(sum((OPS_real-OPS)^2*AB_real,na.rm=T)/sum(AB_real,na.rm = T)))
+        parameter<-(matrix(c(RMSE,i,j,k,m,l),nrow=1))
+        RMSE_mat_2018<-rbind(RMSE_mat_2018,parameter)
+        
+      }
+    }
+  }
+}
+}
+}
+
+
+```
+
+
+##**3) 2017 예측해보기**
+```{r}
+
+player_2017<-data.frame(regular_season)%>%filter(year<=2017)%>%group_by(batter_id,batter_name)%>%filter(max(year)==2017&년차>1)%>%
+  select(batter_id,batter_name)%>%unique()
+
+cum_record_2017<-regular_season%>%group_by(batter_id,batter_name)%>%
+  group_by(batter_id,batter_name)%>%filter(year<=2016)%>%summarise(total_AB=sum(AB),
+total_H=sum(H),
+total_X2B=sum(X2B),
+total_X3B=sum(X3B),
+total_HR=sum(HR),
+total_BB=sum(BB),
+total_HBP=sum(HBP)
+)%>%
+  group_by(batter_id)%>%
+  mutate(avg.tot=total_H/total_AB,SLG=(total_H-total_X2B-total_X3B-total_HR+total_X2B*2+total_X3B*3+total_HR*4)/total_AB,OBP=(total_H+total_BB+total_HBP)/(total_AB+total_BB+total_HBP))%>%
+  mutate(ISO_p.tot=SLG-avg.tot,ISO_o.tot=OBP-avg.tot)%>%select(batter_id,batter_name,total_AB,avg.tot,ISO_p.tot,ISO_o.tot)%>%data.frame()
+```
+
+
+##2017년 예측 데이터 생성
+```{r}
+final_data_2017<- reshape(baseball%>%filter(year>=2014&year<2017)%>%select(batter_id,batter_name,year,AB,avg,ISO_p,ISO_o)%>%arrange(desc(year)), v.names = c('AB','avg','ISO_p','ISO_o'), idvar = "batter_id",
+                          timevar = "year", direction = "wide")
+
+##최근 3개년을 이용할때 단순 년도 순이 아닌 선수별로 최근 년도순으로 정렬필요
+final_data_matrix_2017<-matrix(nrow=nrow(final_data_2017),ncol=ncol(final_data_2017))%>%data.frame()
+final_data_matrix_2017[,1:2]<-final_data_2017[,1:2]
+for(i in 1:nrow(final_data_2017)){
+  for(j in seq(3,14,4)){ 
+    if(is.na(final_data_2017[i,j])==F&is.na(final_data_matrix_2017[i,3])==T){
+      final_data_matrix_2017[i,3:6]<-(final_data_2017[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2017[i,j])==F&is.na(final_data_matrix_2017[i,3])==F&is.na(final_data_matrix_2017[i,7])==T){
+      final_data_matrix_2017[i,7:10]<-(final_data_2017[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2017[i,j])==F&is.na(final_data_matrix_2017[i,3])==F&is.na(final_data_matrix_2017[i,7])==F&is.na(final_data_matrix_2017[i,11])==T){
+      final_data_matrix_2017[i,11:14]<-(final_data_2017[i,j:(j+3)])
+    }
+    else if(is.na(final_data_2017[i,j])==T){
+      next
+    }
+  }
+}
+names(final_data_matrix_2017)<-names(final_data_2017)
+
+names(final_data_matrix_2017)<-gsub('2016','3',names(final_data_matrix_2017))
+names(final_data_matrix_2017)<-gsub('2015','4',names(final_data_matrix_2017))
+names(final_data_matrix_2017)<-gsub('2014','5',names(final_data_matrix_2017))
+
+##최근 3개년의 타석수 합 계산
+final_data_matrix_2017_check<-final_data_matrix_2017%>%group_by(batter_id)%>%mutate(AB_total=sum(AB.3,na.rm=T)+sum(AB.4,na.rm=T)+sum(AB.5,na.rm=T))%>%data.frame()
+
+##2016년 까지의 통산 기록 결합
+final_data_matrix_2017_check<-left_join(final_data_matrix_2017_check,cum_record_2017)
+
+```
+
+##2017년 주전급 신인선수 추출
+```{r}
+
+good_rookie_2017<-game_data%>%group_by(batter_id)%>%
+  filter(batter_id %in% player_2017$batter_id & 년차<4 &game_group %in% c('주전') & year<2017&korean.==1)
+
+rookie_data_2017<-inner_join(baseball%>%filter(year<2017),good_rookie_2017[,c(1,6,7)],by=c('batter_id'='batter_id',
+                                                                                         'year'='year','년차'='년차'))
+rookie_id_2017<-(rookie_data_2017%>%select(batter_id))%>%unique()%>%data.frame()
+
+rookie_data_2017<-rookie_data_2017%>%group_by(year)%>%summarise(이름='주전급신인',
+AB_total=sum(AB)/n(),
+avg=weighted.mean(avg,AB,na.rm=T),
+ISO_p=weighted.mean(ISO_p,AB,na.rm=T),
+ISO_o=weighted.mean(ISO_o,AB,na.rm=T))
+
+rookie_data_matrix_2017<-reshape(data.frame(rookie_data_2017)%>%arrange(desc(year))%>%filter(year<2018),v.names = c('AB_total','avg','ISO_p','ISO_o'), idvar = '이름',
+                            timevar = "year", direction = "wide")
+
+rookie_2017<-(rookie_data_matrix_2017)
+names(rookie_2017)<-gsub('2016','3',names(rookie_2017))
+names(rookie_2017)<-gsub('2015','4',names(rookie_2017))
+names(rookie_2017)<-gsub('2014','5',names(rookie_2017))
+
+```
+
+
+##**2017년 예측 외국인선수 추출**
+##**2017년 예측 가능한 외국인 선수의 경우 2017년에 2년차 이상인 선수만 가능함.**
+```{r}
+foreign.data_2017<-regular_season%>%filter(korean.==0&year<2017)%>%group_by(batter_id)%>%filter(max(년차)>1)%>%group_by(year)%>%
+  dplyr::summarise(이름='외국인선수',
+                     AB_total=sum(AB,na.rm=T)/n(),
+                     avg=weighted.mean(avg,AB,na.rm=T),
+                     ISO_p=weighted.mean(SLG-avg,AB,na.rm=T),
+                     ISO_o=weighted.mean(OBP-avg,AB,na.rm=T)
+                     )
+
+foreign_data_matrix_2017<-reshape(data.frame(foreign.data_2017)%>%arrange(desc(year))%>%filter(year<2017),v.names = c('AB_total','avg','ISO_p','ISO_o'), idvar = '이름',
+                             timevar = "year", direction = "wide")
+
+foreign_id_2017<-regular_season%>%filter(year<2017&korean.==0)%>%group_by(batter_id)%>%filter(max(년차)>1)%>%select(batter_id)%>%unique()
+
+names(foreign_data_matrix_2017)<-names(rookie_2017)
+
+
+
+##2016년 이전 주전급 신인들의 기록을 위에서 생성한 주전급 신인의 기록으로 대체
+final_data_matrix_2017_check[final_data_matrix_2017_check$batter_id %in% rookie_id_2017[,1],]
+final_data_matrix_2017_check[final_data_matrix_2017_check$batter_id %in% rookie_id_2017[,1] & is.na(final_data_matrix_2017_check$AB.4),(which(names(final_data_matrix_2017_check)=='AB.4')):(which(names(final_data_matrix_2017)=='ISO_o.5'))]<-(rookie_2017%>%select(AB_total.4:ISO_o.5))
+final_data_matrix_2017_check[final_data_matrix_2017_check$batter_id %in% rookie_id_2017[,1] & is.na(final_data_matrix_2017_check$AB.5),(which(names(final_data_matrix_2017_check)=='AB.5')):(which(names(final_data_matrix_2017)=='ISO_o.5'))]<-(rookie_2017%>%select(AB_total.5:ISO_o.5))
+
+##2017년 외국인 선수 확인 
+##확인결과 기록을 대체 할 선수 없음.
+final_data_matrix_2017_check[final_data_matrix_2017_check$batter_id %in% foreign_id_2017[,1],]
+
+
+```
+
+##**2017년 예측하기**
+```{r}
+RMSE_mat_2017<-(matrix(ncol=6))
+for(m in 1:5){
+  for(k in 2:6){
+    for(j in 3:7){
+      for(l in 1:10){
+      if((m+k)/(j+k+m+l)<0.25){
+        next
+      }
+      else {
+        weighted.matrix=(matrix(c(j,k,m,l),nrow=4))
+        for(i in seq(200,290,10)){
+          final_data_2017_full<-final_data_matrix_2017_check%>%filter(AB_total>=i|batter_id %in% foreign_name[,1])%>%select(-AB_total,-batter_name)%>%data.frame()
+          final_data_2017_sub<-final_data_matrix_2017_check%>%filter(AB_total<i&(batter_id %in% foreign_name[,1])==F)%>%select(-AB_total,-batter_name)%>%data.frame()
+          
+          data.replace_player_2017<-final_data_2017_sub%>%summarise(batter_id=999,
+                                                                      AB_total_3=sum(AB.3,na.rm=T),
+                                                                      ISO_avg_total_3=weighted.mean(avg.3,AB.3,na.rm=T),
+                                                                      ISO_pow_total_3=weighted.mean(ISO_p.3,AB.3,na.rm=T),
+                                                                      ISO_obp_total_3=weighted.mean(ISO_o.3,AB.3,na.rm=T),
+                                                                      
+                                                                      AB_total_4=sum(AB.4,na.rm=T),
+                                                                      ISO_avg_total_4=weighted.mean(avg.4,AB.4,na.rm=T),
+                                                                      ISO_pow_total_4=weighted.mean(ISO_p.4,AB.4,na.rm=T),
+                                                                      ISO_obp_total_4=weighted.mean(ISO_o.4,AB.4,na.rm=T),
+                                                                      
+                                                                      AB_total_5=sum(AB.5,na.rm=T),
+                                                                      ISO_avg_total_5=weighted.mean(avg.5,AB.5,na.rm=T),
+                                                                      ISO_pow_total_5=weighted.mean(ISO_p.5,AB.5,na.rm=T),
+                                                                      ISO_obp_total_5=weighted.mean(ISO_o.5,AB.5,na.rm=T),
+                                                                      
+                                                                      AB_total_tot=sum(total_AB,na.rm=T),
+                                                                      ISO_avg_total_tot=weighted.mean(avg.tot,total_AB,na.rm=T),
+                                                                      ISO_pow_total_tot=weighted.mean(ISO_p.tot,total_AB,na.rm=T),
+                                                                      ISO_obp_total_tot=weighted.mean(ISO_o.tot,total_AB,na.rm=T)
+                                                                      )
+          
+          names(data.replace_player_2017)=names(final_data_2017_full)
+          
+          final_d_2017<-rbind(final_data_2017_full,data.replace_player_2017)
+          final_d_2017_full<-final_d_2017[is.na(final_d_2017)%>%apply(1,sum)==0,]
+          final_d_2017_non<-final_d_2017[is.na(final_d_2017)%>%apply(1,sum)!=0,]
+          
+          ISO_pow_matrix<-(as.matrix(final_d_2017_full[,str_detect(names(final_d_2017_full),'ISO_p')])%*%weighted.matrix/sum(weighted.matrix))%>%data.frame()
+          ISO_obp_matrix<-(as.matrix(final_d_2017_full[,str_detect(names(final_d_2017_full),'ISO_o')])%*%weighted.matrix/sum(weighted.matrix))%>%data.frame()
+          avg_matrix<-(as.matrix(final_d_2017_full[,str_detect(names(final_d_2017_full),'avg')])%*%weighted.matrix/sum(weighted.matrix))%>%data.frame()
+          
+          OPS_pred<-(avg_matrix+avg_matrix+ISO_pow_matrix+ISO_obp_matrix)%>%data.frame()
+          
+          pred_sub<-cbind(final_data_2017_sub$batter_id,OPS_pred[nrow(OPS_pred),])%>%data.frame()
+          names(pred_sub)<-c('batter_id','OPS')
+          pred_sub$OPS<-as.character(pred_sub$OPS)%>%as.numeric()
+          
+          pred_main<-cbind(final_d_2017_full$batter_id,OPS_pred)%>%data.frame()
+          pred_main<-pred_main[-nrow(pred_main),]
+          names(pred_main)<-c('batter_id','OPS')
+          
+          #pred_main$이름<-as.character(pred_main$이름)
+          #pred_main$OPS<-as.character(pred_main$OPS)%>%as.numeric()        
+          
+          pred_fulltime<-bind_rows(pred_main,pred_sub)
+          #pred_fulltime$이름<-as.character(pred_fulltime$이름)
+          #pred_fulltime$OPS<-as.character(pred_fulltime$OPS)%>%as.numeric()        
+          
+          final_d_2017_non_4year<-final_d_2017_non
+          
+          pow_non_matrix<-as.matrix(final_d_2017_non_4year[,str_detect(names(final_d_2017_non_4year),'ISO_p')])
+          pow_non_index<-pow_non_matrix%>%is.na()%>%apply(2,as.numeric)%>%as.matrix()
+          pow_non_index<-(pow_non_index==0)%>%apply(2,as.numeric)%>%as.matrix()
+          pow_non_matrix[is.na(pow_non_matrix)]<-0
+          ISO_pow_matrix_non<-(pow_non_matrix%*%weighted.matrix/(pow_non_index%*%weighted.matrix))%>%data.frame()
+          
+          obp_non_matrix<-as.matrix(final_d_2017_non_4year[,str_detect(names(final_d_2017_non_4year),'ISO_o')])
+          obp_non_index<-obp_non_matrix%>%is.na()%>%apply(2,as.numeric)%>%as.matrix()
+          obp_non_index<-(obp_non_index==0)%>%apply(2,as.numeric)%>%as.matrix()
+          obp_non_matrix[is.na(obp_non_matrix)]<-0
+          ISO_obp_matrix_non<-(obp_non_matrix%*%weighted.matrix/(obp_non_index%*%weighted.matrix))%>%data.frame()
+          
+          avg_non_matrix<-as.matrix(final_d_2017_non_4year[,str_detect(names(final_d_2017_non_4year),'avg')])
+          avg_non_index<-avg_non_matrix%>%is.na()%>%apply(2,as.numeric)%>%as.matrix()
+          avg_non_index<-(avg_non_index==0)%>%apply(2,as.numeric)%>%as.matrix()
+          avg_non_matrix[is.na(avg_non_matrix)]<-0
+          avg_matrix_non<-(avg_non_matrix%*%weighted.matrix/(avg_non_index%*%weighted.matrix))%>%data.frame()
+          
+          OPS_pred_non<-(avg_matrix_non+avg_matrix_non+ISO_pow_matrix_non+ISO_obp_matrix_non)%>%data.frame()
+          
+          pred_non<-cbind(final_d_2017_non_4year$batter_id,OPS_pred_non)
+          names(pred_non)<-c('batter_id','OPS')
+          
+          pred_full<-rbind(pred_fulltime,pred_non)
+          real_ops<-data.frame(regular_season)%>%filter(year==2017)%>%select(batter_id,batter_name,OPS,AB)
+          names(real_ops)<-c('batter_id','batter_name','OPS_real','AB_real')
+          pred_check<-inner_join(real_ops,pred_full,by=c('batter_id'='batter_id'))
+          #pred_check<-pred_check%>%filter(is.na(OPS)==F)
+          pred_check<-pred_check%>%filter(batter_id %in% player_2017$batter_id)
+          #pred_check<-pred_check%>%filter(batter_id %in% submission$batter_id)
+          
+          RMSE<-pred_check%>%filter()%>%with(sqrt(sum((OPS_real-OPS)^2*AB_real,na.rm=T)/sum(AB_real,na.rm = T)))
+          parameter<-matrix(c(RMSE,i,j,k,m,l),nrow=1)
+          colnames(parameter)<-c('RMSE_2017','i','j','k','m','l')
+          RMSE_mat_2017<-rbind(RMSE_mat_2017,parameter)
+        }
+      }
+    }
+  }
+  }
+}
+
+colnames(RMSE_mat_2017)<-c('RMSE_2017','i','j','k','m','l')
+colnames(RMSE_mat_2018)<-c('RMSE','i','j','k','m','l')
+dd<-left_join(data.frame(RMSE_mat_2018),data.frame(RMSE_mat_2017))
+
+dd2<-dd%>%mutate(total=RMSE+RMSE_2017,sub=abs(RMSE-RMSE_2017))
+dd2<-dd2%>%arrange(total)
+head(dd2)
+
+```
+
+
+##**최종 모델**
+```{r}
+##2019년 예측용 데이터 불러오기
+data<-fread('C:/Users/kitae/Desktop/공모전/final_data.csv',encoding='UTF-8')%>%data.frame()
+
+dbpm<-function(x,j,k,m,l,i){
+          weighted.matrix=(matrix(c(j,k,m,l),nrow=4))
+            full_member_for_2019 <- (x %>% filter(AB_total>=i|batter_id %in% foreign_name[,1]) %>% select(-AB_total,-batter_name) %>%as.matrix())
+            sub_member_for_2019 <- (x %>% filter(AB_total<i&(batter_id %in% foreign_name[,1])==F) %>% select(-AB_total,-batter_name))
+            
+            replace_player_2019<-sub_member_for_2019%>%summarise(batter_id=999,
+                                                                 AB_total_1=sum(AB.1,na.rm=T),  
+                                                                 avg_total_1=weighted.mean(avg.1,AB.1,na.rm=T),
+                                                                 ISO_pow_total_1=weighted.mean(ISO_p.1,AB.1,na.rm=T),
+                                                                 ISO_obp_total_1=weighted.mean(ISO_o.1,AB.1,na.rm=T),
+                                                                 
+                                                                 AB_total_2=sum(AB.2,na.rm=T),  
+                                                                 avg_total_2=weighted.mean(avg.2,AB.2,na.rm=T),
+                                                                 ISO_pow_total_2=weighted.mean(ISO_p.2,AB.2,na.rm=T),
+                                                                 ISO_obp_total_2=weighted.mean(ISO_o.2,AB.2,na.rm=T),
+                                                                 
+                                                                 AB_total_3=sum(AB.3,na.rm=T),  
+                                                                 avg_total_3=weighted.mean(avg.3,AB.3,na.rm=T),
+                                                                 ISO_pow_total_3=weighted.mean(ISO_p.3,AB.3,na.rm=T),
+                                                                 ISO_obp_total_3=weighted.mean(ISO_o.3,AB.3,na.rm=T),
+                                                                 
+                                                                 AB_total_tot=sum(total_AB,na.rm=T),
+                                                                 avg_total_tot=weighted.mean(avg.tot,total_AB,na.rm=T),
+                                                                 ISO_pow_total_tot=weighted.mean(ISO_p.tot,total_AB,na.rm=T),
+                                                                 ISO_obp_total_tot=weighted.mean(ISO_o.tot,total_AB,na.rm=T))%>%as.matrix()
+            
+            colnames(replace_player_2019)<-colnames(full_member_for_2019)  
+            
+            final_d_2019<-rbind(full_member_for_2019,replace_player_2019)%>%as.matrix()
+            final_d_2019_full<-final_d_2019[is.na(final_d_2019)%>%apply(1,sum)==0,]
+            final_d_2019_non<-final_d_2019[is.na(final_d_2019)%>%apply(1,sum)!=0,]
+            
+            ISO_pow_matrix<-(final_d_2019_full[,str_detect(colnames(final_d_2019_full),'ISO_p')])%*%weighted.matrix/sum(weighted.matrix)
+            ISO_obp_matrix<-(final_d_2019_full[,str_detect(colnames(final_d_2019_full),'ISO_o')])%*%weighted.matrix/sum(weighted.matrix)
+            avg_matrix<-(as.matrix(final_d_2019_full[,str_detect(colnames(final_d_2019_full),'avg')])%*%weighted.matrix/sum(weighted.matrix))
+            
+            OPS_pred<-(avg_matrix+avg_matrix+ISO_pow_matrix+ISO_obp_matrix)
+            
+            pred_sub<-cbind(sub_member_for_2019$batter_id,OPS_pred[nrow(OPS_pred),])%>%data.frame()
+            names(pred_sub)<-c('batter_id','OPS')
+            
+            pred_main<-cbind(final_d_2019_full[,1],OPS_pred)%>%data.frame()
+            pred_main<-pred_main[-nrow(pred_main),]
+            names(pred_main)<-c('batter_id','OPS')
+            
+            pred_fulltime<-bind_rows(pred_main,pred_sub)
+            
+            final_d_2019_non_4year<-final_d_2019_non
+            
+            pow_non_matrix<-(final_d_2019_non_4year[,str_detect(colnames(final_d_2019_non_4year),'ISO_p')])
+            pow_non_index<-pow_non_matrix%>%is.na()%>%apply(2,as.numeric)
+            pow_non_index<-((pow_non_index==0)%>%apply(2,as.numeric))
+            pow_non_matrix[is.na(pow_non_matrix)]<-0
+            ISO_pow_matrix_non<-(pow_non_matrix%*%weighted.matrix/(pow_non_index%*%weighted.matrix))
+            
+            obp_non_matrix<-(as.matrix(final_d_2019_non_4year[,str_detect(colnames(final_d_2019_non_4year),'ISO_o')]))
+            obp_non_index<-obp_non_matrix%>%is.na()%>%apply(2,as.numeric)
+            obp_non_index<-((obp_non_index==0)%>%apply(2,as.numeric))
+            obp_non_matrix[is.na(obp_non_matrix)]<-0
+            ISO_obp_matrix_non<-(obp_non_matrix%*%weighted.matrix/(obp_non_index%*%weighted.matrix))
+            
+            avg_non_matrix<-(as.matrix(final_d_2019_non_4year[,str_detect(colnames(final_d_2019_non_4year),'avg')]))
+            avg_non_index<-avg_non_matrix%>%is.na()%>%apply(2,as.numeric)
+            avg_non_index<-((avg_non_index==0)%>%apply(2,as.numeric))
+            avg_non_matrix[is.na(avg_non_matrix)]<-0
+            avg_matrix_non<-(avg_non_matrix%*%weighted.matrix/(avg_non_index%*%weighted.matrix))
+            
+            OPS_pred_non<-(avg_matrix_non+avg_matrix_non+ISO_pow_matrix_non+ISO_obp_matrix_non)
+            
+            pred_non<-cbind(final_d_2019_non_4year[,1],OPS_pred_non)
+            colnames(pred_non)<-c('batter_id','OPS')
+            
+            submission<- fread('C:/Users/kitae/Desktop/공모전/submission.csv')
+            
+            pred_full<-(rbind(pred_fulltime,pred_non)%>%arrange(batter_id)%>%data.frame())
+            pred_check<-inner_join(real_ops,pred_full,by=c('batter_id'='batter_id'))
+            sub_data<-left_join(submission,pred_full)
+            return(sub_data)
+          }
+result<-dbpm(data,4,3,1,8,290)
+
+readr::write_excel_csv(result,'C:/Users/kitae/Desktop/공모전/fuck_jh.csv')
+
+```

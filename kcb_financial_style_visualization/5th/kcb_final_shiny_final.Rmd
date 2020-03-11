@@ -1,0 +1,1167 @@
+---
+title: "KCB_final"
+author: "skku_psat_supercon"
+date: "2019/7/3"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE, message=FALSE, error=FALSE,warning=FALSE}
+#setwd('C:/Users/kmlam/DACON Dropbox/대회/8th_KCB/KCB 2차검수/HelenLim/Code/HelenLim_code
+#')
+library(shiny)
+library(plyr)
+library(dplyr)
+library(NbClust)
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(ggplot2)
+library(devtools)
+library(rgl)
+library(psych)
+library(GPArotation)
+library(sp)
+library(spdep)
+library(rgdal)
+library(rebus)
+library(rmapshaper) #only for simplifing sp object
+library(rebus)
+library(bit64)
+library(spatialEco)
+library(corrplot)
+library(readxl)
+credit <- fread("credit_card_data.csv",encoding="UTF-8") 
+jejudata <- fread("jeju_financial_life_data.csv",encoding="UTF-8") 
+jeju2 <- fread("jeju_financial_life_data.csv",encoding="UTF-8") 
+coordinates(jeju2) = ~x_axis+y_axis
+
+hprice <- read_xlsx("totalhouseprice.xlsx",col_names = TRUE) %>% as.data.frame()
+hprice2019 <- read_xlsx("totalhouseprice2.xlsx",col_names = TRUE) %>% as.data.frame()
+
+```
+
+# I. credit_card_data.csv
+## 1. EDA
+### 1) 데이터 전처리
+* 시각화에 용이한 데이터 형태로 만들기 위해 기초적인 데이터 전처리 실행
+
+```{r data_munging, warning = F}
+# date type으로 변수 타입을 수정합니다.
+credit_munged = 
+  credit %>%
+  unite( col = year_month, year, month, sep = "-", remove = F ) %>%
+  mutate( year_month = as.Date( paste(year_month, '01', sep = '-') ) ) 
+
+credit_munged = 
+  credit_munged %>%
+  mutate( credit_loan = as.numeric(credit_loan),
+          ls_rep_loanb = as.numeric(ls_rep_loanb),
+          inst_rep_loanb = as.numeric(inst_rep_loanb))
+
+# 2016년 1월 10대 데이터를 제거합니다. 
+credit_munged =
+  credit_munged %>%
+  filter( year_month != as.Date("2016-01-01") )
+
+credit_munged = credit_munged[credit_munged$city != '',] # we do not need the datum averaged by ages
+
+credit %<>% filter(ages != '10대'| year != 2016 | month != 1)
+
+# 파생변수를 생성합니다. 
+credit %<>%  mutate(credit_card_spent = (credit_card_installments_payment + credit_card_payment), 
+                    credit_card_ratio = (credit_card_installments_payment + credit_card_payment)/monthly_card_spend,
+                    monthly_ma = monthly_lc - monthly_loan, 
+                    sep_loan = (inst_rep_loanb/ls_rep_loanb)*100)
+```
+
+* credit_card_spent = 신용카드 할부 이용금액 합 + 신용카드 일시불 이용금액 합
+* credit_card_ratio = (신용카드 할부 이용금액 합 + 신용카드 일시불 이용금액 합) / 월 카드 이용 총 금액
+* sep_loan = (분할상환대출 총 대출잔액/일시상환대출 총 대출잔액)*100
+
+### 2) 시각화
+
+#### a) 연령별, 지역별 시각화 - 그래프
+여러 변수들 중 해석에 유의한 변수들을 따로 추출하여 해석해보았다. 
+
+```{r}
+ggplot(credit_munged, aes(x= year_month, y= monthly_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('총 대출잔액(monthly_loan)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+```
+
+* 지역별로는 제주를 제외하고는 월별 총 대출잔액이 두드러진 상승세를 보이는 모습은 발견되지 않았다.
+* 연령별로는 30대~50대와 같이 주요 경제활동 연령대에서 월별 총 대출잔액 값이 높게 나타났다.
+* 반면 10대~20대의 경우에는 월별 총 대출잔액 값이 상대적으로 낮게 나타났다.
+
+```{r, warning=FALSE, fig.align='center'}
+ggplot(credit_munged, aes(x= year_month, y= monthly_cd_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('월별 총 카드대출잔액(monthly_cd_loan)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+ggplot(credit_munged, aes(x= year_month, y= monthly_insurance_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('월별 총 보험대출잔액(monthly_insurance_loan)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+ggplot(credit_munged, aes(x= year_month, y= monthly_installments_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('월별 총 할부금융대출잔액(monthly_installments_loan)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+ggplot(credit_munged, aes(x= year_month, y= monthly_sbk_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('월별 총 저축은행대출잔액monthly_sbk_loan)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+ggplot(credit_munged, aes(x= year_month, y= monthly_bk_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('월별 총 시중은행대출잔액(monthly_bk_loan)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+
+```
+
+>>> 대출회사별 시각화 결과
+
+* 시중은행대출잔액에서는 지역별, 연령별로 큰 변화가 없다.
+* 다만 시중은행대출의 경우 "제주"가 상대적으로 높은 상승세를 보이고 있다.
+
+* 할부금융대출잔액에서는 지역별로는 큰 차이를 보이지 않고 있다.
+* 연령별로는 20대~50대가 주로 이용하며, 70대~90대의 경우에는 상대적으로 적게 이용한다.
+
+* 보험대출잔액에서는 지역별로 큰 차이보다는 연령별로 큰 차이를 보이고 있다.
+* 카드대출잔액에서는 전체적으로 상승세를 보이고 있다.
+* 저축은행대출잔액에서도 전체적으로 상승세를 보이고 있다.
+
+* 즉, 대출회사별로 연령대와 지역을 고려하여 시각화 한 결과는 다음과 같다.
+* A) 제주가 전체적으로 대출금액이 다른 지역에 비해서 가파르게 상승하고 있다.
+* B) 시중은행대출은 크게 증가하지 않았지만, 할부사나 보험사, 카드사 대출은 증가하는 추세에 있다.
+
+```{r, warning=FALSE, fig.align='center'}
+ggplot(credit_munged, aes(x= year_month, y= ls_rep_loanb, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('일시상환대출 총 대출잔액(ls_rep_loanb)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+ggplot(credit_munged, aes(x= year_month, y= inst_rep_loanb, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('분할상환대출 총 대출잔액(inst_rep_loanb)') + 
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+
+```
+  
+>>> 상환방식 별 대출잔액
+
+* 일시상환 총 대출잔액은 지역별, 연령별로 유의미한 결과를 보이고 있다.
+* 일시상환 총 대출잔액은 60대 이상이 다른 연령대에 비해 상대적으로 높은 값을 가진다.
+* 반면 30대 등 상대적으로 연령이 높아질 수록 일시상환 총 대출잔액이 낮은것을 확인할 수 있다.
+
+* 반대로 분할상환대출 총 대출잔액 변수에서는 30대 40대가 주축을 차지하는 것을 볼 수 있다.
+* 반면 60대 이상의 경우 30대 40대 보다 상대적으로 낮은 분할상환 총 대출잔액을 보유하고 있다. 
+
+* 즉, 상환방식별 대출잔액을 분석한 결과,
+* 나이대가 높을 수록 일시상환을 분할상환보다 더 선호한다는 것을 알 수 있었다.
+
+
+
+```{r, warning=FALSE, fig.align='center'}
+ggplot(credit_munged, aes( x = year_month, y = mortgage_loan, color = ages )) +
+  geom_line(size = 1) +
+  ggtitle('담보대출 대출금액 총합') +
+  facet_wrap(~ city, ncol = 4) +
+  theme(axis.text.x = element_text(angle = 35))
+```
+  
+>>> 담보대출 대출금액 총합
+
+확인해보면 17년도 상반기 대구의 10대와 충북의 90대가 눈에띄는 변화를 보여주고 있음을 알 수 있다.
+
+이는 2017년 3월에 출시되었던 미방문 담보대출의 영향이 있었을 수도 있을 것이다.
+[뉴스링크](http://www.seoulfn.com/news/articleView.html?idxno=272918)
+
+* 다른 변수들에 대해서도 다음과 같이 확인할 있다.
+
+```{r , echo = F}
+ui <- fluidPage(
+
+  # App title ----
+  titlePanel("연령별, 도시별"),
+
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c('population', 'num_opencard', 'num_usecard', 
+                              'monthly_card_spend', 'monthly_lc', 'monthly_loan', 
+                              'monthly_bk_loan', 'monthly_cd_loan', 
+                              'monthly_installments_loan', 'monthly_insurance_loan', 
+                              'monthly_sbk_loan', 'loan_commitment', 'inst_rep_loanb', 
+                              'ls_rep_loanb', 'credit_loan', 'mortgage_loan', 
+                              'credit_card_payment', 'credit_card_installments_payment'))
+
+    ),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+
+      # Output: ggploy ----
+      plotOutput(outputId = "ggPlot")
+
+    )
+  )
+)
+```
+
+```{r , echo = F}
+# Define server logic to summarize and view selected dataset ----
+server <- function(input, output) {
+
+  # Generate a summary of the dataset ----
+  output$ggPlot <- renderPlot({
+    idx_selected = colnames(credit_munged) %in% c('year_month', 'ages', 'city', input$variable)
+    dataset_selected = credit_munged[, idx_selected]
+    colnames(dataset_selected)[4] = 'variable_choosed'
+    ggplot(dataset_selected, aes( x = year_month, y = variable_choosed, color = ages )) +
+      geom_line(size = 1) +
+      ggtitle(input$variable) + 
+      facet_wrap(~ city, ncol = 4) +
+      theme(axis.text.x = element_text(angle = 35))
+  })
+
+}
+```
+
+```{r ,echo = F, message=FALSE,fig.align='center'}
+shinyApp(ui, server)
+```
+
+
+```{r}
+
+
+
+hprice2 <- gather(data = hprice, key = "year_month", value = "housepriceindex","전국":"제주")
+colnames(hprice2) <- c("year_month","city","housepriceindex")
+ggplot(hprice2,aes(x=year_month,y=housepriceindex))+geom_line(size=1) + facet_wrap(~city)+
+  ggtitle('2014~2017 주택가격지수')
+hpricegg <- ggplot(hprice2,aes(x=year_month,y=housepriceindex,color=city))+geom_line(size=1)
+hpricegg + geom_vline(xintercept=as.numeric(hprice$date[25]), linetype = 'dotted', color='red', size = 1)+ggtitle('2014~2017 주택가격지수')
+hprice3 <- subset(hprice2,hprice2$city=="전국"|hprice2$city=="제주")
+hpricegg2 <- ggplot(hprice3,aes(x=year_month,y=housepriceindex,color=city))+geom_line(size=1)
+hpricegg2 + geom_vline(xintercept=as.numeric(hprice$date[25]), linetype = 'dotted', color='red', size = 1)+  ggtitle('2014~2017 주택가격지수 (전국,제주)')
+
+hprice20192 <- gather(data = hprice2019, key = "year_month", value = "housepriceindex","전국":"제주")
+colnames(hprice20192) <- c("year_month","city","housepriceindex")
+ggplot(hprice20192,aes(x=year_month,y=housepriceindex))+geom_line(size=1) + facet_wrap(~city)+
+  ggtitle('2018~2019.6 주택가격지수')
+ggplot(hprice20192,aes(x=year_month,y=housepriceindex,color=city))+geom_line(size=1)+
+  ggtitle('2018~2019.6 주택가격지수')
+hprice201922 <- subset(hprice20192,hprice20192$city=="전국"|hprice20192$city=="제주")
+hpricegg201922 <- ggplot(hprice201922,aes(x=year_month,y=housepriceindex,color=city))+geom_line(size=1)
+hpricegg201922 + geom_vline(xintercept=as.numeric(hprice$date[25]), linetype = 'dotted', color='red', size = 1)+ ggtitle('2018~2019.6 주택가격지수')
+
+```
+
+>>> 주택가격 매매지수를 이용한 시각화
+
+* 앞서 살펴본 대출데이터에서 제주지역의 대출잔액이 지속적인 증가세를 보였는데, 이는 주택가격이 지속적으로 상승함에 따라서 나타난 결과인 것으로 보인다.
+* 주택가격지수는 (2017.11 == 100)을 기준으로 작성되었다.
+* 2014년부터 제주지역의 주택가격지수는 지속적인 상승을 거듭하였으며, 전국 평균과 비교하여 큰 상승폭을 보여주고 있다.
+* 하지만 2018년 이후로는 전국 평균과 비교하여 크게 벗어나는 흐름을 보여주고 있지는 않다.
+
+
+
+
+#### b) 지도 시각화
+
+##### b-1) 시각화 위한 사전작업
+
+* 지도 데이터가 필요하므로 shp file을 읽어온다. (도 기준)
+* 데이터가 매우 방대하므로 ms_simplify api를 이용 간단화 해준다.
+* 데이터에 세종시가 없기 때문에 세종시를 제거한다.
+
+```{r, warning=FALSE, message=FALSE, fig.align='center'}
+korea_sp = readOGR(dsn="CTPRVN_201902", layer="TL_SCCO_CTPRVN")
+korea_sp_simplified = ms_simplify(korea_sp)
+korea_sp_simplified@data = korea_sp@data
+korea_sp = korea_sp_simplified
+
+is_sejong = str_sub(korea_sp@data$CTPRVN_CD, 1,2) == "36" #Sejong has CTPRVN_CD with '36' in first two character
+korea_sp = korea_sp[!is_sejong,]
+
+plot(korea_sp, main = 'Korea')
+```
+
+* 데이터 병합을 위해 키 값을 맞춰줘야 하기 때문에 전처리 실행
+* korea_sp, credit summarised 병합
+
+```{r warning = F, message=FALSE}
+population_divided_by_1000 = credit_munged$population/1000 #because of the problem of integer overflow, we should divide it by 1000
+                                                           #we will multiply it at later part
+credit_summarised_4map = credit_munged
+
+credit_summarised_4map_pop_by_city =
+  credit_summarised_4map %>%
+  group_by(city) %>%
+  dplyr::summarise(population_sum_by_city = sum(population))
+
+credit_summarised_4map = 
+  merge(credit_summarised_4map, credit_summarised_4map_pop_by_city, by = 'city')
+
+population_sum_by_city = credit_summarised_4map$population_sum_by_city
+
+credit_summarised_4map = 
+  credit_summarised_4map %>% 
+    dplyr::mutate_at(c('population', 'num_opencard', 'num_usecard', 
+                        'monthly_card_spend', 'monthly_lc', 'monthly_loan', 
+                        'monthly_bk_loan', 'monthly_cd_loan', 
+                        'monthly_installments_loan', 'monthly_insurance_loan', 
+                        'monthly_sbk_loan', 'loan_commitment', 'inst_rep_loanb', 
+                        'ls_rep_loanb', 'credit_loan', 'mortgage_loan', 
+                        'credit_card_payment', 'credit_card_installments_payment'),
+                        function(x) {(x*population_divided_by_1000/population_sum_by_city)*1000}
+                        )
+
+credit_summarised_4map = 
+    credit_summarised_4map %>% 
+    group_by(city) %>%
+    dplyr::summarise_at(c('population', 'num_opencard', 'num_usecard', 
+                        'monthly_card_spend', 'monthly_lc', 'monthly_loan', 
+                        'monthly_bk_loan', 'monthly_cd_loan', 
+                        'monthly_installments_loan', 'monthly_insurance_loan', 
+                        'monthly_sbk_loan', 'loan_commitment', 'inst_rep_loanb', 
+                        'ls_rep_loanb', 'credit_loan', 'mortgage_loan', 
+                        'credit_card_payment', 'credit_card_installments_payment'),
+                        sum
+                        )
+
+korea_sp@data$CTP_KOR_NM =
+  korea_sp@data$CTP_KOR_NM %>% 
+  str_remove_all(pattern = or1(c("상","라","청","도")) ) %>%
+  str_sub(1, 2)
+
+korea_spdf = korea_sp
+korea_spdf@data = merge(korea_sp@data, credit_summarised_4map, by.x = "CTP_KOR_NM", by.y = "city")
+```
+
+
+##### b-2) 지역별 변수 시각화 
+
+```{r echo = F}
+ui_sp <- fluidPage(
+
+  # App title ----
+  titlePanel("도시별"),
+
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c('population', 'num_opencard', 'num_usecard', 
+                              'monthly_card_spend', 'monthly_lc', 'monthly_loan', 
+                              'monthly_bk_loan', 'monthly_cd_loan', 
+                              'monthly_installments_loan', 'monthly_insurance_loan', 
+                              'monthly_sbk_loan', 'loan_commitment', 'inst_rep_loanb', 
+                              'ls_rep_loanb', 'credit_loan', 'mortgage_loan', 
+                              'credit_card_payment', 'credit_card_installments_payment'))
+
+    ),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+
+      # Output: spPlot ----
+      plotOutput(outputId = "spPlot")
+
+    )
+  )
+)
+```
+
+```{r echo = F}
+# Define server logic to summarize and view selected dataset ----
+server_sp <- function(input, output) {
+
+  # Generate a summary of the dataset ----
+  output$spPlot <- renderPlot({
+    spplot(korea_spdf, zcol = input$variable, main = input$variable)
+  })
+
+}
+```
+
+```{r ,echo = F, message=FALSE, fig.align='center'}
+shinyApp(ui_sp, server_sp)
+```
+
+
+
+#### c) 자기상관성 - Moran's I statistics
+
+* 지역적으로 수치적인 차이는 있었지만, 통계적으로 분석을 진행하는 것이 유의미한지 파악하기 위하여 지역적 자기상관성 테스트를 진행하였다.
+
+* 지역적인 상관성이 존재하는지 Moran's I statistics를 통해 확인해 보았다. (제주도 제외 이유는 섬이라는 지역적 특성 때문에 지역적 자기상관성을 확인하지 않아도 될 것이라고 판단했기 때문이다.)
+
+```{r, warning=FALSE, message=FALSE, fig.align='center'}
+is_jeju = str_sub(korea_sp@data$CTPRVN_CD, 1,2) == "50" #Jeju has CTPRVN_CD with '50' in first two character
+korea_sp_without_jeju = korea_sp[!is_jeju,]
+plot(korea_sp_without_jeju, main = 'Korea with out Jeju')
+```
+
+```{r, warning=FALSE}
+korea_spdf_without_jeju = korea_spdf[!is_jeju,]
+korea_nb_without_jeju = poly2nb(korea_spdf_without_jeju, snap = 0.05)
+```
+
+```{r, warning=FALSE, fig.align='center'}
+korea_centers_without_jeju = coordinates(korea_spdf_without_jeju)
+plot(korea_spdf_without_jeju); plot(korea_nb_without_jeju, korea_centers_without_jeju, add = TRUE)
+```
+
+
+```{r echo = F}
+ui_moran <- fluidPage(
+
+  # App title ----
+  titlePanel("자기상관성 검정(Moran's I Autocorrelation test)"),
+
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c('population', 'num_opencard', 'num_usecard', 
+                              'monthly_card_spend', 'monthly_lc', 'monthly_loan', 
+                              'monthly_bk_loan', 'monthly_cd_loan', 
+                              'monthly_installments_loan', 'monthly_insurance_loan', 
+                              'monthly_sbk_loan', 'loan_commitment', 'inst_rep_loanb', 
+                              'ls_rep_loanb', 'credit_loan', 'mortgage_loan', 
+                              'credit_card_payment', 'credit_card_installments_payment')),
+      
+      # Input: Slider for the number of bins ----
+      sliderInput(inputId = "simulations",
+                  label = "Number of simulations:",
+                  min = 100,
+                  max = 2000,
+                  value = 1000)
+
+    ),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+
+      # Output: Verbatim text for data summary ----
+      verbatimTextOutput("moran")
+
+    )
+  )
+)
+```
+
+자기상관성 검정에 기준이 되는 이웃 지점 시각화
+
+본 데이터에는 162개의 pop_cd가 존재한다. 이는 시각화로 인사이트를 도출하기에 많은 개수라고 판단하였다. 더욱 선명한 인사이트를 도출하기 위해 부분에 집중하기로 하였고 이를 판단하기 위해 지역적 자기상관성 테스트를 진행하였다.
+
+지역적 자기상관성을 다른 모든 변수에서 확인해보았다. p-value가 0.05보다 작으면, 지역적 자기 상관성이 존재한다는 의미이고, 0.05보다 크면 지역적 자기 상관성이 존재하지 않는다는 의미이다. 다음에서 볼 수 있듯이, 모든 변수에서 지역적 자기 상관성이 거의 존재하지 않았다. 이를 통해 지역별 차이보다는 성별, 연령별 차이에 집중하는 것이 더욱 의미있다고 판단하였고 이후의 분석에서는 지역별 차이보다 성별, 연령별 차이에 따른 인사이트 발견에 집중하였다.
+
+```{r echo = F}
+# Define server logic to summarize and view selected dataset ----
+server_moran <- function(input, output) {
+
+  # Generate a summary of the dataset ----
+  output$moran <- renderPrint({
+    moran.mc(
+      korea_spdf_without_jeju@data[,input$variable], 
+      nb2listw(korea_nb_without_jeju),
+      nsim = input$simulations - 1
+      )
+  })
+
+}
+```
+
+```{r echo = F, message=FALSE, fig.align='center'}
+shinyApp(ui_moran, server_moran)
+```
+
+
+
+
+##2. Clustering(금융스타일 분류)
+
+단순히 변수 별로 시각화를 진행하였을 경우 변수의 개수도 많고 개별 변수의 영향력만 고려하게 되므로 인사이트 도출이 쉽지 않다고 판단하였다.
+
+이에 우선적으로 고객들의 금융 스타일을 파악하고 규명하기 위해 기존 변수들과 파생변수들을 이용하여 클러스터링을 진행하였다.
+
+이를 위해 사람들의 금융 스타일을 알 수 있는 여러 변수를 추려보았다.
+(해석의 용이함을 위해 일부 패러미터와 변수를 조정하였다. )
+
+이에 사용된 변수는 다음과 같다.  
+1) 은행업종 총 대출금액  
+2) 카드업종 총 대출금액  
+3) 할부금융업종 총 대출금액  
+4) 보험업종 총 대출금액  
+5) 저축은행업종 총 대출금액  
+6) 담보대출 대출금액 총합  
+7) 신용카드 일시불 이용금액 합  
+8) 신용카드 할부 이용금액 합  
+9) 실카드 사용수  
+10) 총 대출 약정 금액 - 총 대출금액  
+11) 분할상환비율  
+
+
+먼저 기존의 변수와 파생된 변수들로 클러스터링을 해 보았을 때, 3개의 군집이 가장 적절하다고 나왔다.(kmeans) 각 군집별 특성을 살펴보면 다음과 같다. 
+
+* 클러스터1: 은행업종 총 대출금액, 담보대출 대출금액 총합 변수의 값이 높았다. 즉, 제1금융권 대출을 주로 하며 집이나, 차 같은 담보대출이 있는 스타일이다.
+
+* 클러스터2: 저축은행은행업종 총 대출금액 변수의 값이 높았다. 즉, 은행대출과 담보대출 등 금리가 낮은 대출과는 관련이 상대적으로 떨어지는 반면에 저축은행의 대출과 같이 상대적으로 금리가 높은 대출을 가지고 있는 스타일이다.
+
+* 클러스터3: 카드업종 총 대출금액, 할부금융업종 총 대출금액, 보험업종 총 대출금액, 신용카드 총 이용금액(할부+일시), 분할상환비 변수에서 높은 값이 나왔다. 즉, 제2금융권에서 주로 대출을 하면서 분할 상환비율이 높은 금융스타일이다. 
+
+
+
+
+
+
+
+```{r clustering, warning=FALSE,message=FALSE}
+
+library(NbClust)
+for_cl <- credit %>% 
+  dplyr::select(pop_cd, year, month ,
+                monthly_bk_loan, monthly_cd_loan, monthly_installments_loan, monthly_insurance_loan,
+                monthly_sbk_loan, mortgage_loan,  
+                credit_card_spent, credit_card_ratio, sep_loan) 
+
+for_cl %<>% arrange(pop_cd)
+
+age_sex_cl <- for_cl[3441:nrow(for_cl),]
+
+credit_cluster <- as.data.frame(scale(age_sex_cl[,-c(1:3)]))
+
+nc <- NbClust(credit_cluster, min.nc = 2, max.nc = 8, method = "kmeans") ## best in 3
+
+set.seed(0)
+credit_kmeans <- kmeans(credit_cluster, centers = 3, iter.max = 10000)
+
+age_sex_cl$cluster <- credit_kmeans$cluster
+
+# 클러스터 1
+summary(age_sex_cl %>% filter(cluster == 1))
+
+# 클러스터 2
+summary(age_sex_cl %>% filter(cluster == 2))
+
+# 클러스터 3
+summary(age_sex_cl %>% filter(cluster == 3))
+
+
+```
+
+
+## 3. Factor Analysis
+
+* 클러스터링을 통해 사람들의 금융스타일을 구분하고 파악할 수 있지만 한 클러스터 내에서의 차이는 규명하지 못한다. 
+
+이를 더욱 엄밀하게 파악하고 해석하기 위하여 Factor analysis를 진행하고 해석가능한 잠재변수를 찾고자 했다.
+
+사용된 변수는 clustering에서 사용한 변수와 동일하다.
+
+
+```{r FA, warning=FALSE, message=FALSE, results='hold'}
+
+for_fa <- credit %>% 
+  dplyr::select(pop_cd, year, month ,
+                monthly_bk_loan, monthly_cd_loan, monthly_installments_loan, monthly_insurance_loan,
+                monthly_sbk_loan, mortgage_loan,  
+                credit_card_spent, credit_card_ratio, sep_loan) 
+
+for_fa %<>% arrange(pop_cd)
+
+age_sex_fa <- for_fa[3441:nrow(for_fa),]
+
+
+
+med.factor <- principal( age_sex_fa[,-c(1,2,3)], rotate="varimax" , nfactors = 3) 
+med.factor
+
+med.factor$scores %>% head(10)
+
+
+credit_visual <- age_sex_fa %>% select(pop_cd, year, month)
+credit_visual <- cbind(credit_visual, as.data.frame(med.factor$scores))
+colnames(credit_visual)[c(4,5,6)] <- c("Factor_score2", "Factor_score1", "Factor_score3")
+
+credit_visual$cluster <- credit_kmeans$cluster
+credit_visual$cluster <- as.character(credit_visual$cluster)
+
+
+```
+
+Factor analysis 결과 모든 변수를 설명할 수 있는 잠재변수 3개를 만들어낼 수 있었고 각각의 변수는 다음과 같은 의미를 가진다.
+
+* RC1는 카드업종 총 대출금액, 할부금융업종 총 대출금액, 보험업종 총 대출금액, 신용카드 총 이용금액(할부+일시), 분할상환비 변수에서 높은 로딩값을 가졌다. 즉, RC1은 제2금융권에서 주로 대출을 하면서 분할 상환비율이 높은 직장인일 가능성을 나타내는 변수이다.
+(Cluster 3의 금융스타일 정도를 나타내는 지수)
+
+* RC2은 은행업종 총 대출금액, 실카드 사용비율, 담보대출 대출금액 총합 변수에서 높은 로딩값을 가졌다. 
+제1금융권 대출을 주로 하며 집이나, 차 같은 담보대출이 있을 가능성을 나타내는 변수이다.
+(Cluster 1의 금융스타일 정도를 나타내는 지수)
+
+
+* RC3은 저축은행업종 총 대출금액 변수에서 높은 로딩값을 가졌다. 
+은행대출과 담보대출 등 금리가 낮은 대출과는 관련이 상대적으로 떨어지는 반면 저축은행의 대출과 같이 상대적으로 금리가 높은 대출을 가지고있을 가능성을 나타내는 변수이다.
+(Cluster 2의 금융스타일 정도를 나타내는 지수)
+
+이는 클러스터 해석과 유사한 결과를 보였다. 즉, 클러스터 1에 속하는 금융스타일을 가졌다면 RC2의 값이 높을 것이고 
+클러스터 2에 속하는 금융스타일을 가졌다면 RC3의 값이 높을 것이다.
+
+더 나아가 클러스터 2에 속하는 금융스타일을 가졌다 해도 RC1과 RC2의 값이 높으냐 낮으냐에 따라 이 사람의 금융스타일을 더욱 엄밀하게 파악할 수 있다.
+
+
+
+## 4. Factor Analysis - Visualization
+pop_cd 별로 factor analysis한 결과를 3D-plot을 시각화해보았다.
+
+```{r viz popcd, warning=FALSE, message=FALSE, results='hold', fig.align='center'}
+
+library(plotly)
+
+library(RColorBrewer)
+
+n <- 18
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+set.seed(1)
+colors_vector <- sample(col_vector, n)
+
+
+
+loading <- med.factor$loadings[,c(1,2,3)] %>% as.data.frame()
+
+p <- plot_ly() %>%  
+        add_trace(x = ~ Factor_score1, y = ~ Factor_score2, z = ~ Factor_score3, 
+                  data = credit_visual,
+                  type = "scatter3d", mode = "markers", color = ~pop_cd, colors = colors_vector,
+                  marker = list(size = 5, opacity = 1, 
+                                line = list(color = 'honeydew2', width = 1 ))) %>% 
+  layout(scene = list(xaxis = list(title = 'Factor1'),
+                     yaxis = list(title = 'Factor2'),
+                     zaxis = list(title = 'Factor3')))
+
+
+for (k in 1:nrow(loading)) {
+   x <- c(0, loading[k,1])
+   y <- c(0, loading[k,2])
+   z <- c(0, loading[k,3])
+   p <- p %>% add_trace(x=x, y=y, z=z, name = rownames(loading)[k],
+            type="scatter3d", mode="lines",
+            line = list(width=8), 
+            opacity = 0.8)
+}
+
+p
+
+
+```
+
+
+각 pop_cd 별로 factor analysis결과를 시각화하였다. 해당 시각화는 다음과 같이 해석할 수 있다.  
+
+* 각 시점의 pop_cd가 해당 변수에 중요한 요인에 영향을 많이 받았다
+* Y10(십대 여성)이 monthly_sbk_loan(저축은행업종 총 대출금액) 변수에 중요한 factor3에 영향을 많이 받았다고 해석할 수 있다. 
+* Y30 35(30대 남여) / Y40 45(40대 남여) -- bank_loan , mortgage_loan에 영향을 많이 받음
+
+
+## 5. Factor Analysis & Clustering - Visualization
+pop_cd의 금융 스타일을 factor analysis 결과에 중첩하였다. 
+
+해당 벡터들을 3D plot을 통해 시각화해 보았더니 다음과 같은 방향성이 보였다.  
+
+```{r viz clus, warning=FALSE, message=FALSE, results='hold', fig.align='center'}
+
+
+colors_vector <- c('coral', 'chartreuse3', 'cadetblue3' )
+
+
+p <- plot_ly(credit_visual, x = ~Factor_score1, y = ~Factor_score2, z = ~Factor_score3, color = ~cluster, colors = colors_vector) %>%
+  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'Factor1'),
+                     yaxis = list(title = 'Factor2'),
+                     zaxis = list(title = 'Factor3')))
+
+
+p
+
+```
+
+
+
+
+## 6. 인사이트 - Visualization
+
+이를 전체가 아닌 pop_cd별로 시각화 해본 결과 각 시점에 따라서 금융스타일을 뜻하는 클러스터가 달라지는 경우가 있었다. 그 중, 60대 여성.남성의 경우, 시간이 지남에 따라서 클러스터1(제1금융권 사용 및 담보대출이 존재하는 스타일)에서 클러스터3(제2금융권 주로 사용 및 분할상환비율이 높은 스타일)로 변화하는 인사이트를 발견할 수 있었다. 
+
+이를 해석해보자면 정년 맞이하는 고객들이 직장을 그만두게 되면서 금융스타일의 형태가 주로 큰 금액을 대출하는 클러스터 1 금융스타일에서
+비교적 적은 금액을 다양한 곳에서 대출하는 클러스터 3 금융스타일로 변화했다고 할 수 있다.
+
+이렇게 고객층 별로 각각 시각화를 해보면 그 고객층의 금융스타일 변화를 Factor analysis의 잠재변수를 통해서 알 수 있다.
+
+이를 통해 60대 고객층 외에도 시간이 지남에 따라 클러스터의 카테고리는 달라지지 않지만 그 안에서 금융스타일의 변화가 일어남을 알 수 있다. 이를 통해 
+금융스타일의 변화를 파악할 수 있고 이를 바탕으로 고객을 타겟팅하여 마케팅을 진행하거나 맞춤 상품 제안을 할 수 있을 것이다.
+
+```{r clustering find1, warning=FALSE,message=FALSE, fig.align='center'}
+
+credit_visual_Y60 <- credit_visual%>% filter(pop_cd == 'Y60')
+
+credit_visual_Y60 %<>% mutate(date = paste(year, month, sep = '-'))
+
+colors_vector <- c( 'cadetblue3' ,'coral' )
+
+
+p <- plot_ly(credit_visual_Y60,  x = ~Factor_score1, y = ~Factor_score2, z = ~Factor_score3, color = ~cluster, colors = colors_vector, text = ~date) %>%
+  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'Factor1'),
+                     yaxis = list(title = 'Factor2'),
+                     zaxis = list(title = 'Factor3')))
+
+
+p
+
+
+```
+
+
+ 
+
+
+## 7. 서비스 제안
+현재 kcb는 신용정보 서비스, 여신관리 시스템, 신용현황 관리 서비스를 기업들에게 제공하고 있다. 이에 더불어 위의 분석을 이용한다면, 고객 그룹별의 금융 스타일을 데이터기반으로 분류할 수 있을 것이며, 더 나아가 기업들에게 해당 그룹이 어떠한 금융스타일 변화가 일어나는지 모니터링을 해주는 서비스를 제공해 줄 수 있을 것이다. 
+
+## 8. 향후 발전 가능성
+이를 더 확장하여 개인별 데이터로 해당 분석을 진행하게 된다면 개인별 외부 변수(개인별 소득, 개인별 가족구성원, 주소, 등등)를 추가할 수 있을 것이고, 더 풍부한 인사이트를 활용한 고객 타겟팅이 가능할 것이다.
+
+
+# II. jeju_financial_life_data.csv
+## 1. EDA
+### 1) 데이터 전처리
+
+
+```{r warning=FALSE,message=FALSE, fig.align='center'}
+
+
+jejudata$sex = as.factor(jejudata$sex)
+jejudata$avg_debt = as.numeric(jejudata$avg_debt)
+jejudata$avg_debt_noneb = as.numeric(jejudata$avg_debt_noneb)
+jejudata$avg_debt_mortgage = as.numeric(jejudata$avg_debt_mortgage)
+jejudata$avg_debt_collateral = as.numeric(jejudata$avg_debt_collateral)
+
+ 
+
+jeju_summarised_job = 
+  jejudata %>% 
+    group_by(sex, age) %>%
+    summarise(job_majorc = mean(job_majorc),
+              job_smallc = mean(job_smallc),
+              job_public = mean(job_public),
+              job_profession = mean(job_profession),
+              job_self = mean(job_self),
+              job_none = mean(job_none),
+              job_other = mean(job_other))
+
+jeju_summarised_debt = 
+  jejudata %>% 
+  group_by(sex, age) %>% 
+  summarise(avg_debt = mean(avg_debt),
+            avg_debt_credit = mean(avg_debt_credit),
+            avg_debt_noneb = mean(avg_debt_noneb),
+            avg_debt_mortgage = mean(avg_debt_mortgage),
+            avg_debt_deposit = mean(avg_debt_deposit),
+            avg_debt_collateral = mean(avg_debt_collateral))
+
+
+```
+
+### 2) 기본적인 시각화 - 그래프
+
+#### a) 그룹별(pop_cd) 
+
+각 그룹별로 평균적인 수치 시각화를 해보았다. 
+```{r echo = F, warning=FALSE}
+ui <- fluidPage(
+
+  # App title ----
+  titlePanel("pop_cd 별"),
+
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c('job_majorc','job_smallc','job_public','job_profession','job_self','job_none','job_other'))
+
+    ),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+
+      # Output: ggploy ----
+      plotOutput(outputId = "ggPlot")
+
+    )
+  )
+)
+```
+
+#### a-1) 직업관련된 변수들에 대해서 시각화를 해보았다. 
+
+```{r echo = F}
+# Define server logic to summarize and view selected dataset ----
+server <- function(input, output) {
+
+  # Return the requested dataset ----
+  datasetInput <- reactive({
+    switch(input$variable,
+           "job_majorc" = jeju_summarised_job[,c(1,2,3)],
+           "job_smallc" = jeju_summarised_job[,c(1,2,4)],
+           "job_public" = jeju_summarised_job[,c(1,2,5)],
+           "job_profession" = jeju_summarised_job[,c(1,2,6)],
+           "job_self" = jeju_summarised_job[,c(1,2,7)] ,
+           "job_none" = jeju_summarised_job[,c(1,2,8)],
+           "job_other" = jeju_summarised_job[,c(1,2,9)])
+  })
+
+  # Generate a summary of the dataset ----
+  output$ggPlot <- renderPlot({
+    dataset <- datasetInput()
+    colnames(dataset)[3] = 'variable_choosed'
+    ggplot(dataset, aes( x = age, y = variable_choosed, color = sex )) +
+      geom_line(size = 1) +
+      ggtitle(input$variable) + 
+      facet_wrap(facets = ~sex,ncol = 1) +
+      theme(axis.text.x = element_text(angle = 35))
+  })
+
+}
+```
+
+```{r echo = F, fig.align='center', warning=FALSE, message=FALSE}
+shinyApp(ui, server)
+```
+
+```{r echo = F, warning=FALSE}
+ui <- fluidPage(
+
+  # App title ----
+  titlePanel("pop_cd 별"),
+
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c('avg_debt','avg_debt_credit','avg_debt_mortgage','avg_debt_deposit','avg_debt_collateral'))
+
+    ),
+    
+    
+    # Main panel for displaying outputs ----
+    mainPanel(
+
+      # Output: ggploy ----
+      plotOutput(outputId = "ggPlot")
+
+    )
+  )
+)
+```
+
+#### a-2) 부채에 관련된 변수들을 각각 시각화 해 보았다. 
+
+```{r echo = F}
+# Define server logic to summarize and view selected dataset ----
+server <- function(input, output) {
+
+  # Return the requested dataset ----
+  datasetInput <- reactive({
+    switch(input$variable,
+           "avg_debt" = jeju_summarised_debt[,c(1,2,3)],
+           "avg_debt_credit" = jeju_summarised_debt[,c(1,2,4)],
+           "avg_debt_mortgage" = jeju_summarised_debt[,c(1,2,5)],
+           "avg_debt_deposit" = jeju_summarised_debt[,c(1,2,6)],
+           "avg_debt_collateral" = jeju_summarised_debt[,c(1,2,7)])
+  })
+  
+
+  # Generate a summary of the dataset ----
+  output$ggPlot <- renderPlot({
+    dataset <- datasetInput()
+    colnames(dataset)[3] = 'variable_choosed'
+    ggplot(dataset, aes( x = age, y = variable_choosed, color = sex )) +
+      geom_line(size = 1) +
+      ggtitle(input$variable) + 
+      facet_wrap(facets = ~sex,ncol = 1) +
+      theme(axis.text.x = element_text(angle = 35))
+  })
+
+}
+
+str(jeju_summarised_debt)
+```
+
+
+```{r echo = F, fig.align='center', warning=FALSE, message=FALSE}
+shinyApp(ui, server)
+```
+
+
+#### 3) 지도 시각화 - 모든변수
+
+##### a) 지도 불러오기
+```{r}
+korea_emd_sp = readOGR(dsn="EMD_201905", layer="TL_SCCO_EMD")
+
+is_jeju = str_sub(korea_emd_sp@data$EMD_CD, 1,2) == "50"
+
+jeju_emd_sp = korea_emd_sp[is_jeju,]
+
+jeju_emd_sp@data = 
+  jeju_emd_sp@data %>%
+  mutate_all(as.character)
+
+plot(jeju_emd_sp, main = 'Jeju')
+```
+
+
+##### b) 지도에 폴리곤 추가하기
+
+```{r}
+
+
+proj4string(jeju2) = CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+jeju2 = spTransform(jeju2, CRS(proj4string(jeju_emd_sp)))
+
+jeju2.poly <- point.in.poly(jeju2, jeju_emd_sp)
+
+plot(jeju_emd_sp)
+points(jeju2, pch = 20)
+
+jeju2.poly_data = jeju2.poly@data %>% 
+  group_by(EMD_CD) %>%
+  summarise_if(is.numeric, mean)
+
+jeju_emd_sp@data = merge(jeju_emd_sp@data, jeju2.poly_data, by = 'EMD_CD', all.x = T)
+
+
+is_na_sp = !complete.cases(jeju_emd_sp@data)
+jeju_no_na_emd_sp = jeju_emd_sp[!is_na_sp,]
+ 
+
+```
+
+##### c) 지도로 시각화하기
+
+```{r}
+ui_sp_jeju <- fluidPage(
+  
+  # App title ----
+  titlePanel("도시별"),
+  
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+    
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+      
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c("job_majorc", "job_smallc", "job_public", "job_profession", "job_self" ,
+                              "job_none", "job_other", "avg_income", "med_income", "avg_spend",          
+                              "avg_foreign_spend", "avg_debt" , "avg_debt_credit", "avg_debt_noneb",      
+                              "avg_debt_mortgage", "avg_debt_deposit", "avg_debt_collateral", "avg_credit_rat",
+                              "medium_resid_rat", "large_resid_rat", "vehicle_own_rat"     ))
+      
+    ),
+    
+    # Main panel for displaying outputs ----
+    mainPanel(
+      
+      # Output: spPlot ----
+      plotOutput(outputId = "spPlot_jeju")
+      
+    )
+  )
+)
+
+
+server_sp_jeju <- function(input, output) {
+  
+  # Generate a summary of the dataset ----
+  output$spPlot_jeju <- renderPlot({
+    spplot(jeju_no_na_emd_sp, zcol = input$variable, main = input$variable)
+  })
+  
+}
+
+
+
+```
+
+
+```{r}
+
+shinyApp(ui_sp_jeju, server_sp_jeju)
+
+```
+
+##### 4) 자기상관성 검정
+
+credit_data와 마찬가지로 자기상관성 검정을 진행하였다. 제주 데이터의 경우 읍면동 단위의 분석이 가능하기 때문에 더욱 엄밀한 테스트를 진행할 수 있었다.
+
+```{r}
+jeju_nb = poly2nb(jeju_no_na_emd_sp, snap = 0.05)
+jeju_centers = coordinates(jeju_no_na_emd_sp)
+
+plot(jeju_no_na_emd_sp); plot(jeju_nb, jeju_centers, add = TRUE)
+
+```
+
+인접 폴리곤이 존재하지 않는 지역들은 제외하였다. 
+
+```{r}
+
+is_no_nb = jeju_nb[] %>% sapply(mean) == 0
+
+jeju_no_na_emd_sp_without_no_neighbor_region = jeju_no_na_emd_sp[!is_no_nb,]
+
+jeju_nb_without_no_neighbor_region = poly2nb(jeju_no_na_emd_sp_without_no_neighbor_region, snap = 0.05)
+jeju_centers_without_no_neighbor_region = coordinates(jeju_no_na_emd_sp_without_no_neighbor_region)
+
+plot(jeju_no_na_emd_sp_without_no_neighbor_region)
+plot(jeju_nb_without_no_neighbor_region, jeju_centers_without_no_neighbor_region, add = TRUE)
+
+```
+
+자기상관성에 기준이 되는 이웃된 포인트들을 표시해보았다. 
+
+
+
+```{r}
+ui_moran_jeju <- fluidPage(
+  
+  # App title ----
+  titlePanel("자기상관성 검정(Moran's I Autocorrelation test)"),
+  
+  # Sidebar layout with a input and output definitions ----
+  sidebarLayout(
+    
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+      
+      # Input: Selector for choosing dataset ----
+      selectInput(inputId = "variable",
+                  label = "Choose a variable:",
+                  choices = c("job_majorc", "job_smallc", "job_public", "job_profession", "job_self" ,
+                              "job_none", "job_other", "avg_income", "med_income", "avg_spend",          
+                              "avg_foreign_spend", "avg_debt" , "avg_debt_credit", "avg_debt_noneb",      
+                              "avg_debt_mortgage", "avg_debt_deposit", "avg_debt_collateral", "avg_credit_rat",
+                              "medium_resid_rat", "large_resid_rat", "vehicle_own_rat")),
+      
+      # Input: Slider for the number of bins ----
+      sliderInput(inputId = "simulations",
+                  label = "Number of simulations:",
+                  min = 100,
+                  max = 2000,
+                  value = 1000)
+      
+    ),
+    
+    # Main panel for displaying outputs ----
+    mainPanel(
+      
+      # Output: Verbatim text for data summary ----
+      verbatimTextOutput("moran_jeju")
+      
+    )
+  )
+)
+
+server_moran_jeju <- function(input, output) {
+  
+  # Generate a summary of the dataset ----
+  output$moran_jeju <- renderPrint({
+    moran.mc(
+      jeju_no_na_emd_sp_without_no_neighbor_region@data[,input$variable] %>% as.numeric(), 
+      nb2listw(jeju_nb_without_no_neighbor_region),
+      nsim = input$simulations - 1
+    )
+  })
+  
+}
+
+```
+
+
+```{r}
+
+shinyApp(ui_moran_jeju, server_moran_jeju)
+
+```
+
+지역적 자기상관성을 다른 모든 변수에서 확인해보았다. p-value가 0.05보다 작으면, 지역적 자기 상관성이 존재한다는 의미이고, 0.05보다 크면 지역적 자기 상관성이 존재하지 않는다는 의미이다. 다음에서 볼 수 있듯이, 모든 변수에서 지역적 자기 상관성이 대부분 존재하였다. 이는 즉, 특정 지역에 각 변수들의 값이 몰려 있거나 특정 지역에 한정 되어 있다고 할 수 있다. 이를 통해 시각화를 통한 수치적 차이가 의미 있는 결과라는 정당성을 얻을 수 있었다.
+
+실제로 위에서 각 변수들을 지도 위에 시각화 하였을 때 뚜렷한 차이를 보였다. 이를 통해 각 변수들이 어느 지역에서 높은지, 어느 지역에 몰려있는 지 파악할 수 있다.
+
+또한, 변수 별로 지도 시각화를 해본 결과 몇몇 변수들이 유사한 패턴을 보이는 것을 볼 수 있었다.
+
+이를 통계적으로 규명하기 위하여 상관관계를 볼 수 있는 correlation plot을 그린 후, 확인해 보았다. 
+
+## 2. 인사이트 - Visualization
+```{r}
+
+jejudata[,7:21] = jejudata[,7:21] %>% mutate_all(as.numeric)
+corr_jeju = cor(jejudata[,7:21])
+corrplot(corr_jeju,method="circle")
+
+```
+
+
+* 평균 연소득과 평균 채무 보유액이 양의 상관관계를 보이는 것으로 보아, 두 변수는 비슷한 지역에서 유사한 패턴을 보인다고 할 수 있다. 두 변수의 관계를 해석해 본다면 소득이 많다고 해서 채무가 없는 것이 아니라, 오히려 소득이 있는 사람들이 빚을 더 많이 지는 경향이 있다고 해석할 수 있다. 이와 같은 과정을 통하여 유사한 패턴을 보이는 변수들을 규명할 수 있고 이 변수들이 높은 지역을 탐구하여 지역적 특징과 이들의 금융 스타일을 파악할 수 있다.
+

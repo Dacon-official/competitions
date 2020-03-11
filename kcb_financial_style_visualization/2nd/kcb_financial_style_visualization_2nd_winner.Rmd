@@ -1,0 +1,4612 @@
+---
+title: "KCB 금융스타일 시각화 경진대회 보고서"
+date: "`r Sys.Date()`"
+author: "김하영, 배현주, 이승훈, 정회빈, 조윤영"
+output:
+  rmdformats::readthedown:
+    code_folding: hide
+    self_contained: true
+    thumbnails: false
+    lightbox: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, cache=T, comment="", message=F, warning=F)
+```
+
+# 라이브러리 불러오기
+
+```{r Load libraries, warning=F, message=F}
+if (!require(rmdformats)) install.packages("rmdformats", type="source")
+library(tidyverse)
+if (!require(gifski)) install.packages("gifski", type="source")
+library(gganimate) # gifski 패키지가 설치되어 있어야 한다.
+library(ggthemes)
+library(ggpubr)
+library(gridExtra) # grid.arrange
+library(plotly)
+library(corrplot)
+library(DT) # datatable
+library(cluster)
+library(fpc)
+library(factoextra)
+library(ggfortify) # autoplot
+library(RColorBrewer)
+library(MASS)
+library(raster) # shapefile
+library(rgdal) # spTransform
+library(maptools)
+if (!require(gpclib)) install.packages("gpclib", type="source")
+```
+
+```{r gpclibPermit, echo=F, results=F}
+gpclibPermit()
+```
+
+# credit_card_data
+
+## 데이터 불러오기
+
+```{r Load data1, message=F}
+data1 <- read_csv("credit_card_data.csv")
+data1$year <- as.integer(data1$year) 
+data1$month <- as.integer(data1$month)
+data1 <- data1[,c(1:12, 25:26, 13:24)] # 카드 관련 변수끼리 묶어주기 위해 칼럼 순서를 바꿈
+
+## split data by pop_cd
+data1_L <- data1 %>% filter(is.na(sex)==1) %>% dplyr::select(-sex)
+data1_Y <- data1 %>% filter(is.na(city)==1) %>% dplyr::select(-city)
+cat_var <- c(colnames(data1_L)[sapply(data1_L, class)=="character"], c("year", "month"))
+num_var <- setdiff(colnames(data1_L), cat_var)
+
+data1_L$city <- factor(data1_L$city, levels=c("서울", "경기", "인천", "부산", "울산", "대구", "대전", "광주", "경남", "경북", "충남", "충북", "전남", "전북", "강원", "제주"))
+```
+
+데이터를 data1_L과 data1_Y로 나누었다. data1_L은 지역별 데이터이고, data1_Y는 성별 데이터이다. 지역 정보가 있는 행에는 성별 정보가 없고 성별 정보가 있는 행에는 지역 정보가 없어서 이렇게 분할하였다.
+
+---
+
+## 외부 데이터
+
+```{r shapefile}
+# 지도 시각화를 위한 shapefile
+korea <-  shapefile("CTPRVN_201703/TL_SCCO_CTPRVN.shp")
+korea <- spTransform(korea, CRS("+proj=longlat"))
+korea_map <- fortify(korea)
+
+data1_L <- data1_L %>% mutate(id = case_when(city=="서울" ~ "0",
+                                             city=="부산" ~ "1",
+                                             city=="대구" ~ "2",
+                                             city=="인천" ~ "3",
+                                             city=="광주" ~ "4",
+                                             city=="대전" ~ "5",
+                                             city=="울산" ~ "6",
+                                             city=="세종" ~ "7",
+                                             city=="경기" ~ "8",
+                                             city=="강원" ~ "9",
+                                             city=="충북" ~ "10",
+                                             city=="충남" ~ "11",
+                                             city=="전북" ~ "12",
+                                             city=="전남" ~ "13",
+                                             city=="경북" ~ "14",
+                                             city=="경남" ~ "15",
+                                             city=="제주" ~ "16"))
+```
+
++ 지도 시각화를 하려면 shapefile을 다운받아야 한다.
+
++ shapefile은 [http://www.gisdeveloper.co.kr/?p=2332](http://www.gisdeveloper.co.kr/?p=2332)에서 다운로드 할 수 있다.
+
++ rmarkdown 파일이 있는 디렉토리에서 CTPRVN_201703 폴더에 `TL_SCCO_CTPRVN.dbf`, `TL_SCCO_CTPRVN.prj`, `TL_SCCO_CTPRVN.shp`, `TL_SCCO_CTPRVN.shx` 파일이 있어야 위의 코드가 실행된다.
+
+---
+
+통계청(KOSIS)의 "행정구역(읍면동)별/5세별 주민등록인구(2011년~) 데이터" 중 2016년 1월부터 2017년 12월 자료
+
+```{r Preprocessing external data}
+data_pop <- read_csv('population_data_data1.csv')
+
+data_pop_L1 <- data_pop %>% 
+  filter(sex=="총인구수" & !city=="전국" & !(year==2016 & month==1)) %>%
+  group_by(city,ages) %>%
+  summarise(population=mean(population,na.rm=T))
+
+data_pop_L2 <- data_pop_L1 %>% 
+  filter(ages %in% c("100+", "90대") & !city=="세종특별자치시") %>%
+  group_by(city) %>%
+  summarise(population=sum(population,na.rm=T))
+ages <- rep("90대",nrow (data_pop_L2))
+data_pop_L2 <- cbind(data_pop_L2,ages)[,c(1,3,2)]
+data_pop_L3 <- data_pop_L1 %>% 
+  filter(!(ages %in% c("100+", "90대")) & !city=="세종특별자치시")
+
+data_pop_L <- rbind(data.frame(data_pop_L3),data.frame(data_pop_L2))
+data_pop_L <- data_pop_L[order(data_pop_L$city),]
+
+data_pop_Y1 <- data_pop %>% 
+  filter(!sex=="총인구수" & city=="전국" & !(year==2016 & month==1)) %>%
+  group_by(sex, ages) %>%
+  summarise(population=mean(population, na.rm=T))
+
+data_pop_Y2 <- data_pop_Y1 %>% 
+  filter(ages %in% c("100+", "90대")) %>%
+  group_by(sex) %>%
+  summarise(population=sum(population,na.rm=T))
+
+ages <- rep("90대", nrow (data_pop_Y2))
+data_pop_Y2 <- cbind(data_pop_Y2,ages)[, c(1,3,2)]
+data_pop_Y3 <- data_pop_Y1 %>% filter(!(ages %in% c("100+", "90대")))
+
+data_pop_Y <- rbind(data.frame(data_pop_Y3),data.frame(data_pop_Y2))
+data_pop_Y <- data_pop_Y[order(data_pop_Y$sex),]
+```
+
+---
+
+## 전처리
+
+```{r total_loan}
+# 대출 항목 정보에 따라 합계 변수 생성
+data1_L <- data1_L %>% 
+  mutate(total_loan1 = monthly_bk_loan +
+           monthly_cd_loan +
+           monthly_installments_loan +
+           monthly_insurance_loan +
+           monthly_sbk_loan,
+         total_loan2 = loan_commitment + inst_rep_loanb + ls_rep_loanb,
+         total_loan3 = credit_loan + mortgage_loan)
+data1_Y <- data1_Y %>% 
+  mutate(total_loan1 = monthly_bk_loan + 
+           monthly_cd_loan + 
+           monthly_installments_loan + 
+           monthly_insurance_loan + 
+           monthly_sbk_loan,
+         total_loan2 = loan_commitment + inst_rep_loanb + ls_rep_loanb,
+         total_loan3 = credit_loan + mortgage_loan)
+```
+
+변수 설명을 보면 대출금액은
+
++ 개인대출정보 항목에 따라 은행업종, 카드업종, 할부금융업종, 보험업종, 저축은행업종 대출금액으로 구분된다.
+
++ 거래형태코드에 따라 한도대출, 분할상환대출, 일시상환대출로 구분된다.
+
++ 신용/담보 대출이 구분된다.
+
+각 항목에 따른 비율을 확인하기 위해 항목별 합계를 계산하여 개인대출정보 항목의 합은 total_loan1, 거래형태코드 항목의 합은 total_loan2, 신용/담보 대출의 합은 total_loan3으로 명명하여 새로운 변수를 생성하였다.
+
+---
+
+추가로 지역&연령별, 성별&연령별각 변수의 평균을 계산하여, 각 pop_cd 별로 하나의 obs를 가지는 자료를 생성하였다. 
+
+```{r mean}
+data1_L_mean <- data1_L %>% 
+  group_by(city,ages) %>% 
+  summarise_each(mean, num_var)
+data1_L_mean_ID <- paste0(data1_L_mean$city,data1_L_mean$ages)
+data1_L_mean <- as.data.frame(data1_L_mean)
+rownames(data1_L_mean) <- data1_L_mean_ID
+
+data1_Y_mean <- data1_Y %>% 
+  group_by(sex,ages) %>% 
+  summarise_each(mean, num_var)
+data1_Y_mean_ID <- paste0(data1_Y_mean$sex,data1_Y_mean$ages)
+data1_Y_mean <- as.data.frame(data1_Y_mean)
+rownames(data1_Y_mean) <- data1_Y_mean_ID
+```
+
+---
+
+## 변수별 시각화 {.tabset}
+
+> 변수명이 적혀있는 탭을 누르면 각 변수별 시각화 결과를 볼 수 있다.
+
+### 고객 인원수(population)
+
+먼저 해당그룹 고객 인원수를 나타내는 population 변수를 살펴보자.
+
+```{r population1}
+data1_L %>% group_by(year, month) %>% summarise(total_pop=sum(population)) %>% datatable(rownames = F)
+```
+
++ credit_card_data는 고객구분 코드별로 표본추출해서 만든 데이터가 아니라 KCB DB에 있는 모든 데이터에 대해 고객구분 코드별로 평균을 취해서 만든 데이터로 보인다.
+
++ 2016년 1월 데이터만 유독 전체 population 값이 작은 것을 볼 수 있다. 이어지는 내용에서 변수별 시각화를 했을 때 2016년 1월 데이터가 특이값으로 나타났다.
+
+```{r population2}
+data1_Y %>% group_by(year, month) %>% summarise(total_pop=sum(population)) %>% datatable(rownames = F)
+```
+
++ 성별 데이터의 population 값을 지역별 데이터의 population 값과 비교해보면 기간별 population의 총합이 다른 것을 알 수 있다.
+
++ 전체 DB에서 지역 정보있는 고객 데이터가 성별 정보가 있는 고객 데이터보다 적다고 추측해 볼 수 있다. 
+
+
+
+**(1)** 2016년의 월별 population 변화 - 누적막대그래프
+
+```{r population3, fig.width=6, fig.height=4}
+p <- data1_L %>% filter(year==2016) %>%
+  ggplot(aes(x=city, y=population, fill=ages)) + 
+  geom_bar(aes(group=month),alpha=0.9, stat="identity") + 
+  theme_bw() + 
+  scale_fill_tableau() + 
+  transition_time(month) + labs(title = "2016년 {frame_time}월")
+gganimate::animate(p, fps=5, end_pause = 10, width=600, height=400)
+```
+
++ 2016년 1월을 제외하고는 거의 비슷한 패턴을 보인다.
+
+**(2)** 2017년의 월별 population 변화 - 누적막대그래프
+
+```{r population4, fig.width=6, fig.height=4}
+p <- data1_L %>% filter(year==2017) %>%
+  ggplot(aes(x=city, y=population, fill=ages)) + 
+  geom_bar(aes(group=month),alpha=0.9, stat="identity") + 
+  theme_bw() + 
+  scale_fill_tableau() + 
+  transition_time(month) + labs(title = "2017년 {frame_time}월")
+gganimate::animate(p, fps=5, end_pause = 10, width=600, height=400)
+```
+
++ 2017년의 population 값은 월별 편차가 크지 않다.
+
+**(3)** 2016년의 월별 population 변화 - 누적막대그래프(연령대 별 비율)
+
+```{r population5, fig.width=6, fig.height=4}
+p <- data1_L %>% filter(year==2016) %>%
+  ggplot(aes(x=city, y=population, fill=ages)) + 
+  geom_bar(aes(group=month),alpha=0.9, stat="identity", position="fill") + 
+  theme_bw() + 
+  scale_fill_tableau() + 
+  transition_time(month) + labs(title = "2016년 {frame_time}월")
+gganimate::animate(p, fps=5, end_pause = 10, width=600, height=400)
+```
+
++ 2016년 1월의 10대 비율이 다른 기간에 비해 유독 작다.
+
+**(4)** 2017년의 월별 population 변화 - 누적막대그래프(연령대 별 비율)
+
+```{r population6, fig.width=6, fig.height=4}
+p <- data1_L %>% filter(year==2017) %>%
+  ggplot(aes(x=city, y=population, fill=ages)) + 
+  geom_bar(aes(group=month), alpha=0.9, stat="identity", position="fill") + 
+  theme_bw() +
+  scale_fill_tableau() + 
+  transition_time(month) + labs(title = "2017년 {frame_time}월")
+gganimate::animate(p, fps=5, end_pause = 10, width=600, height=400)
+```
+
++ 2017년의 population 값의 비율은 월별 편차가 크지 않다.
+
+**(5)** 성별 연령대별 고객 인원 수의 상자그림
+
+```{r population7, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=population, fill=sex)) +
+  geom_boxplot(alpha=0.7) +
+  theme_bw() +
+  scale_fill_fivethirtyeight() + 
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 고객 인원 수")
+```
+
++ 10대 ~ 70대까지는 남자가 여자보다 더 많은 편이고, 80대와 90대는 여자가 남자보다 조금 더 많다.
+
+**(6)** 실제 총 인구 수와의 비교
+
+```{r population8, fig.width=6, fig.height=5}
+pop_data_L <- full_join(data1_L_mean, data_pop_L, by=c("city", "ages"))
+# cor.test(pop_data_L$population.x,pop_data_L$population.y)$estimate
+pop_data_Y <- full_join(data1_Y_mean, data_pop_Y, by=c("sex", "ages"))
+# cor.test(pop_data_Y$population.x,pop_data_Y$population.y)$estimate
+
+pop_data_L %>% 
+  ggplot(aes(x=population.x, y=population.y))+
+  xlab("KCB data population")+ ylab("Real population")+
+  ggtitle("연령별 지역별 실제 총 인구수와 비교")+
+  geom_point(aes(col=ages), size=3, alpha=0.5) + 
+  theme_bw() + scale_color_tableau() +
+  theme(plot.title = element_text(hjust = 0.5, size=15)) +
+  xlim(0, 2500000)+ ylim(0, 2500000) +
+  geom_abline(intercept = 0, slope=1, linetype="dashed", color="red", size=1)
+
+pop_data_Y %>% 
+  ggplot(aes(x=population.x, y=population.y))+
+  xlab("KCB data population")+ylab("Real population")+ 
+  ggtitle("연령별 성별 실제 총 인구수와 비교")+
+  geom_point(aes(col=ages,shape=sex), size=3, alpha=0.5) + 
+  theme_bw() + scale_color_tableau() +
+  theme(plot.title = element_text(hjust = 0.5, size=15)) +
+  geom_abline(intercept = 0, slope=1, linetype="dashed", color="red", size=1)
+```
+
++ 실제 총 인구와 KCB 데이터의 총 인구 변수간의 강한 선형관계(연령별 지역별 자료 : 0.968, 연령별 성별 자료 : 0.954)가 있으므로 위의 데이터가 성별, 연령별, 지역별 인구를 대표하고 있다고 할 수 있고, population이라는 변수를 단순히 지역코드에 포함된 데이터의 수를 넘어 그 도시와 연령의 실제 인구 크기를 나타내는 변수로 볼 수 있다. 
+
++ 10대는 전체 인구수보다 작기 때문에 해석에서 주의를 요구한다. 
+
++ 10대를 제외하고는 실제 인구보다 KCB데이터의 인구수가 많은 것으로 보아, 같은 사람에 대해 중복된 데이터가 있는지 확인할 필요가 있다.  
+
+
+> End of Tab
+
+---
+
+### 평균 신용점수(avg_score)
+
+먼저 신용점수 변수에 대한 시각화를 진행하였다.
+
+```{r avg_score1, fig.width=8, fig.height=4}
+data1_L %>% ggplot(aes(x=ages, y=avg_score, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 연령대별 평균 신용점수")
+```
+
++ 상자그림에서 특이값들이 발견되었는데, 확인결과 모두 2016년 1월에 데이터임을 알 수 있었으며, 다른 변수들에 대해 탐색해본 결과에서도 2016년 1월 데이터가 특이값으로 잡히는 경우가 많았다. 그래서 이어지는 내용에서는 2016년 1월 데이터를 제외하고 분석을 진행하였다.
+
+```{r delete 201601}
+data1_L <- data1_L %>% filter(!(year==2016 & month==1))
+data1_Y <- data1_Y %>% filter(!(year==2016 & month==1))
+```
+
+```{r avg_score2, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(avg_score=mean(avg_score))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_score)) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 신용점수") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 평균 신용점수의 지역별 평균값은 서울, 대전, 대구 등 대도시는 높게 나타났고, 강원, 충남, 전북, 전남은 낮게 나타났다.
+
+```{r avg_score4, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=avg_score, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 평균 신용점수")
+```
+
++ 서울과 경기는 30대에 비해 40대와 50대로 가면서 평균 신용점수가 낮아지고, 60대와 70대까지는 높아지다가 다시 90대로 가면서 낮아지는 형태이다.
+
++ 인천, 부산, 강원은 30대로 가면서 평균 신용점수가 높아지다가 40대에서 낮아지고 50대 ~ 70대 까지 다시 높아지다 80대에서 다시 낮아지는 패턴을 보인다.  
+
++ 대구, 대전, 광주, 충남, 충북, 전북, 제주는 70대까지 평균 신용점수가 대체로 높아지는 패턴을 보이고, 70대에서 평균 신용점수가 가장 높다.
+
++ 울산, 경남, 경북은 60대까지 대체로 평균 신용점수가 높아지는 패턴을 보이고, 60대에서 평균 신용점수가 가장 높다.
+
++ 전남은 다른 지역과는 달리 90대의 평균 신용점수가 가장 높다.
+
+```{r avg_score5, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=avg_score, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 평균 신용점수")
+```
+
++ 10대를 제외하고는 지역별 편차가 상당히 큰 것을 알 수 있다. 전반적으로 서울의 평균 신용점수가 다른 지역보다 높은데, 50대의 경우 서울의 평균 신용점수는 다른 연령대 서울의 평균 신용점수에 비해 낮았고, 울산의 평균 신용점수가 가장 높다. 제주의 평균 신용점수는 전 연령대에서 낮은 편이고, 전반적으로 전남지역이 가장 낮은 평균 신용점수를 보이는 것을 확인할 수 있다. 
+
+
+```{r avg_score6, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=avg_score, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 평균 신용점수")
+```
+
+10대 ~ 60대까지는 여자의 신용 점수가 남자의 신용 점수보다 높게 나타났고, 70대 ~ 90대는 남자의 신용 점수가 여자의 신용 점수보다 높은 특성을 보인다. 30대 ~ 50대에서 신용점수의 남녀 격차가 상당히 큰 것으로 나타났다.
+
+
+> End of Tab
+
+---
+
+### 평균 신용등급(avg_rat)
+
+고객구분 코드 그룹의 평균 신용등급
+
+```{r avg_rat1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(avg_rat=mean(avg_rat))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_rat)) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 신용등급") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 지도상에는 강원, 전남, 광주, 인천의 평균 신용등급의 지역별 평균값이 좋지 않은 것으로 나타났는데, 그 차이는 크지 않았다.
+
+```{r avg_rat2, fig.width=6, fig.height=4, out.width="60%"}
+p1 <- data1_L %>% mutate(avg_rat=factor(avg_rat)) %>% 
+  ggplot(aes(x=avg_rat, fill=avg_rat)) + 
+  geom_bar(width = 0.5, alpha=0.7) + ylim(0, 3000) +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5, color="black", size=4) +
+  theme_bw() +
+  scale_fill_fivethirtyeight(label=c("3등급", "4등급")) +
+  theme(legend.position="bottom", legend.direction="horizontal",
+        legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("avg_rat(지역별 데이터)")
+
+p2 <- data1_Y %>% mutate(avg_rat=factor(avg_rat)) %>% 
+  ggplot(aes(x=avg_rat, fill=avg_rat)) + 
+  geom_bar(width = 0.5, alpha=0.7) + ylim(0, 350) +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5, color="black", size=4) +
+  theme_bw() +
+  scale_fill_fivethirtyeight(label=c("3등급", "4등급")) +
+  theme(legend.position="bottom", legend.direction="horizontal",
+        legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("avg_rat(성별 데이터)")
+
+grid.arrange(p1, p2, ncol=2)
+```
+
++ 지역별 데이터와 성별 데이터에서 평균 신용등급의 막대그래프를 그려본 결과 3등급과 4등급만 존재한다. 평균 신용등급(avg_rat)보다는 평균 신용점수(avg_score)를 보는 것이 좋아보인다.
+
+> End of Tab
+
+---
+
+### 총 개설 카드수(num_opencard)
+
+총 개설 카드수: 기준일 현재 전체카드(신용카드/체크카드/신용카드+체크카드) 개설정보의 총 건수
+
+```{r num_opencard1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(num_opencard=mean(num_opencard))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=num_opencard)) + 
+  geom_polygon(color="white") + labs(title="지역별 총 개설 카드수") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 대전, 대구, 부산 등 대도시의 총 개설 카드수의 지역별 평균값이 크다.
+
+```{r num_opencard3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=num_opencard, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 개설 카드수")
+```
+
++ 총 개설 카드수의 연령대에 따른 패턴은 지역에 따라 크게 다르지 않았다.
+
+```{r num_opencard4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=num_opencard, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 개설 카드수")
+```
+
++ 30대 까지는 총 개설 카드수가 증가하다가 그 이후부터 계속 감소하는데, 20대 ~ 50대 광주의 총 개설 카드수가 크게 나타났다.
+
+```{r num_opencard5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=num_opencard, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 총 개설 카드수")
+```
+
++ 20대 ~ 50대는 여자가 남자보다 카드를 더 많이 개설하고, 30대 여자가 카드를 가장 많이 개설하는 편이다.
+
+> End of Tab
+
+---
+
+### 실제 사용 카드수(num_usecard)
+
+실제 사용 카드수: 기준일로부터 6개월내 총 이용금액 > 0인 전체카드(신용카드/체크카드/신용카드+체크카드)의 월별 등록기관 수의 합 중 최고값
+
+```{r num_usecard1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(num_usecard=mean(num_usecard))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=num_usecard)) + 
+  geom_polygon(color="white") + labs(title="지역별 실제 사용 카드수") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 대전, 대구, 부산 등 대도시 총 개설 카드수의 지역별 평균값이 큰 지역은 실제 사용 카드수의 지역별 평균값도 크다.
+
+```{r num_usecard3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=num_usecard, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 실제 사용 카드수")
+```
+
++ 실제 사용 카드수의 연령대에 따른 패턴은 지역에 따라 크게 다르지 않았다.
+
+```{r num_usecard4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=num_usecard, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 실제 사용 카드수")
+```
+
++ 실제 사용 카드수는 지역보다는 연령대에 따른 차이가 더 크다.
+
+```{r num_usecard5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=num_usecard, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 실제 사용 카드수")
+```
+
++ 총 개설 카드수와 같은 패턴을 보인다. 20대 ~ 50대는 여자가 남자보다 카드를 더 많이 개설하고, 30대 여자가 카드를 가장 많이 개설하는 편이다.
+
+---
+
+개설 카드 중 실제 사용하는 카드의 비율을 num_usecard/num_opencard로 구하여 살펴보았다.
+
+```{r num_usecard ratio2, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=num_usecard/num_opencard, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 실제 개설 카드수의 비율")
+```
+
++ 개설 카드 중 실제 사용카드 수의 비율의 연령대에 따른 패턴은 지역에 따라 크게 다르지 않았다.
+
+```{r num_usecard ratio3, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=num_usecard/num_opencard, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 실제 개설 카드수의 비율")
+```
+
++ 10대 ~ 70대 까지는 대체로 개설한 카드 중 절반정도를 실제 사용하는 것으로 보인다.
+
+
+```{r num_usecard ratio4, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=num_usecard/num_opencard, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 실제 사용 카드수의 비율")
+```
+
++ 10대와 30대 ~ 50대는 성별에 따른 실제 사용 카드수의 비율 차이가 거의 없었고, 70대 ~ 90대는 남자가 여자보다 개설한 카드 중 실제 사용하는 카드의 비율이 높은 것으로 나타났다.
+
+> End of Tab
+
+---
+
+### 월 카드 총 이용금액(monthly_card_spend)	
+
+월 카드 총 이용금액: 기준일로부터 1개월내 전체카드(신용카드/체크카드/신용카드+체크카드)의 총 이용금액의 월별 합
+
+```{r monthly_card_spend1,fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_card_spend=mean(monthly_card_spend))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_card_spend)) + 
+  geom_polygon(color="white") + labs(title="지역별 월 카드 총 이용금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 지역별 월 카드 총 이용금액의 평균은 서울, 경기, 제주에서 특히 높게 나타났다.
+
+```{r monthly_card_spend3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_card_spend, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 월 카드 총 이용금액")
+```
+
++ 월 카드 총 이용금액의 연령대에 따른 패턴은 지역에 따라 크게 다르지 않았다.
+
+```{r monthly_card_spend4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_card_spend, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 월 카드 총 이용금액")
+```
+
++ 30대 ~ 60대는 제주의 월 카드 총 이용금액이 다른 지역보다 크고, 80대와 90대는 서울의 월 카드 이용 금액이 다른 지역보다 크다. 
+
+```{r monthly_card_spend5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_card_spend, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw()+
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 월 카드 총 이용금액")
+```
+
++ 10대와 20대를 제외한 다른 연령대에서는 남자의 월 카드 총 이용금액이 여자의 월 카드 총 이용금액보다 크다.
+
+> End of Tab
+
+---
+
+### 신용카드 일시불 이용금액(credit_card_payment)	
+
+신용카드 일시불 이용금액 :	1개월내 신용카드(신용카드/신용카드+체크카드)의 일시불 이용금액의 합
+
+```{r credit_card_payment1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(credit_card_payment=mean(credit_card_payment))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=credit_card_payment)) + 
+  geom_polygon(color="white") + labs(title="지역별 신용카드 일시불 이용금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 지역별 신용카드 일시불 이용금액의 평균은 서울, 경기, 제주에서 크게 나타났다.
+
+```{r credit_card_payment3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_card_spend, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용카드 일시불 이용금액")
+```
+
++ 신용카드 일시불 이용금액의 연령대에 따른 패턴은 지역에 따라 크게 다르지 않았다.
+
+```{r credit_card_payment4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_card_spend, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용카드 일시불 이용금액")
+```
+
++ 30대 ~ 60대에서 서울과 제주의 신용카드 일시불 이용금액이 크게 나타나며, 80대, 90대는 서울이 다른 지역에 비해 신용카드 일시불 이용금액이 상당히 큰 편이다. 
+
+
+```{r credit_card_paymen5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=credit_card_payment, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw()+
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 신용카드 일시불 이용금액")
+```
+
++ 성별 연령대별 신용카드 일시불 이용금액은 월 카드 총 이용금액과 같은 패턴을 보인다. 10대와 20대를 제외한 다른 연령대에서는 여자보다 남자의 신용카드 일시불 이용금액보다 크다.
+
+> End of Tab
+
+---
+
+### 신용카드 할부 이용금액(credit_card_installments_payment)
+
+신용카드 할부 이용금액: 1개월내 신용카드(신용카드/신용카드+체크카드)의 할부이용금액의 합
+
+```{r credit_card_installments_payment1,fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(credit_card_installments_payment=mean(credit_card_installments_payment))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=credit_card_installments_payment)) + 
+  geom_polygon(color="white") + labs(title="지역별 신용카드 할부 이용금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 신용카드 일시불 이용금액과 마찬가지로 지역별 신용카드 할부 이용금액의 평균은 서울, 경기, 제주가 높게 나타났고, 부산이 특히 높다.
+
+```{r credit_card_installments_payment3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=credit_card_installments_payment, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용카드 할부 이용금액")
+```
+
++ 신용카드 할부 이용금액의 연령대에 따른 패턴은 지역에 따라 크게 다르지 않았다.
+
+```{r credit_card_installments_payment4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=credit_card_installments_payment, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용카드 할부 이용금액")
+```
+
++ 신용카드 할부 이용금액은 30대 ~ 60대에서는 부산과 제주의 값이 크게 나타났다.
+
+```{r credit_card_installments_payment5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=credit_card_installments_payment, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 신용카드 할부 이용금액")
+```
+
++ 80대와 90대를 제외한 전 연령대에서 남자보다 여자의 신용카드 할부 이용 금액이 더 크다.
+
+> End of Tab
+
+---
+
+### 총 대출약정금액(monthly_lc)
+
+총 대출약정금액: KCB에 등록된 대출개설정보 중 개인대출정보의 대출 약정금액의 합
+
+```{r monthly_lc1,fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_lc=mean(monthly_lc))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_lc)) + 
+  geom_polygon(color="white") + labs(title="지역별 총 대출약정금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기에서 총 대출약정금액의 지역별 평균값이 큰 편이고, 전남이 가장 작다.
+
+```{r monthly_lc3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_lc, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 대출약정금액")
+```
+
++ 서울, 경기, 대구는 연령대가 증가할수록 총 대출약정금액도 커지는 패턴을 보이고, 다른 지역은 대체로 50대까지 증가하다 감소하는 패턴을 보인다.
+
++ 제주의 총 대출약정금액의 월별 편차는 다른 지역에 비해 큰 편이다.
+
+```{r monthly_lc4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_lc, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 대출약정금액")
+```
+
++ 전반적으로 서울의 대출약정금액이 다른 지역에 비해 큰 편이고, 80대와 90대에서 그 격차가 더 크게 나타났다.
+
++ 제주의 경우 40대 ~ 70대가 다른 연령대에서보다 총 대출약정금액이 크게 나타났다.
+
++ 제주와 울산의 90대는 같은 지역의 다른 연령대에 비해 총 대출약정금액이 작은 편이다.
+
+```{r monthly_lc5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_lc, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 총 대출약정금액")
+```
+
++ 전반적으로 남자의 총 대출약정금액이 여자의 총 대출약정금액 보다 크다.
+
+> End of Tab
+
+---
+
+### 총 대출금액(monthly_loan)	
+
+총 대출금액:	KCB에 등록된 대출개설정보 중 개인대출정보의 대출금액의 합
+
+```{r monthly_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_loan=mean(monthly_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 총 대출금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 총 대출약정금액과 마찬가지로 지역별 총 대출금액의 지역별 평균도 서울, 경기가 가장 크고, 전남이 가장 작다.
+
+```{r monthly_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 대출금액")
+```
+
++ 서울, 경기는 연령대가 증가할수록 총 대출금액도 커지는 패턴을 보이고, 다른 지역은 대체로 50대까지 증가하다 감소하는 패턴을 보인다.
+
++ 제주의 총 대출금액의 월별 편차는 다른 지역에 비해 큰 편이다.
+
+```{r monthly_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 대출금액")
+```
+
++ 전반적으로 서울, 경기, 제주의 총 대출금액이 크게 나타났다.
+
++ 제주의 경우 40대 ~ 70대가 다른 연령대에서보다 총 대출금액이 크게 나타났다.
+
+```{r monthly_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 총 대출금액")
+```
+
++ 전반적으로 남자의 총 대출금액이 여자의 총 대출금액보다 크다.
+
+> End of Tab
+
+---
+
+### 은행업종 총 대출금액(monthly_bk_loan)	
+
+은행업종 총 대출금액: 은행업종으로부터 KCB에 등록된 대출개설정보 중 개인대출정보의 대출금액의 합
+
+```{r monthly_bk_loan1 ,fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_bk_loan=mean(monthly_bk_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_bk_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 은행업종 총 대출금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 은행업종 총 대출금액의 지역별 평균은 전반적으로 서울, 경기가 높게 나타났다.
+
+```{r monthly_bk_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_bk_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 은행업종 총 대출금액")
+```
+
++ 서울, 경기는 연령대가 증가할수록 은행업종 총 대출금액도 커지는 패턴을 보이고, 다른 지역은 대체로 50대까지 증가하다 감소하는 패턴을 보인다.
+
++ 제주의 은행업종 총 대출금액의 월별 편차는 다른 지역에 비해 큰 편이다.
+
+```{r monthly_bk_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_bk_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 은행업종 총 대출금액")
+```
+
++ 전반적으로 서울과 경기의 은행업종 총 대출금액이 다른 지역에 비해 큰 편이다.
+
++ 제주의 경우 40대 ~ 70대에서 은행업종 총 대출금액이 높게 나타났다.
+
+
+```{r monthly_bk_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_bk_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 은행업종 총 대출금액")
+```
+
++ 대체로 남자가 여자에 비해 은행업종 총 대출금액이 크다.
+
+---
+
+다음으로 은행업종 총 대출금액 비율을 계산하여 살펴보았다.
+
+```{r monthly_bk_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(monthly_bk_loan_rate = monthly_bk_loan/total_loan1)
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_bk_loan_rate=mean(monthly_bk_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_bk_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 은행업종 총 대출금액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울의 은행업종 총 대출 금액 비율 평균이 다른 지역에 비해 상당히 높은 편이다.
+
+```{r monthly_bk_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_bk_loan/total_loan1, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 대출금액 비율")
+```
+
++ 연령대가 증가할수록 은행업종 대출금액 커지는 패턴을 보이며, 서울의 경우 전 연령대에서 은행업종 대출금액 비율이 1에 가까운 것으로 나타났다.
+
+```{r monthly_bk_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_bk_loan/total_loan1, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 총 대출금액 비율")
+```
+
++ 10대에서 변화량이 매우 큰데, 이는 10대 고객이 적고, 주어진 데이터가 이용 실적이 있는 고객들에 대한 평균 값이기 때문으로 보인다.
+
++ 10대를 제외하면 지역에 따른 편차는 크지 않은데, 40대 ~ 90대에서 제주의 은행업종 총 대출금액 비율이 다른 지역에 비해 높은 것이 눈에 띈다.
+
+
+```{r monthly_bk_loan9, fig.width=6, fig.height=4}
+data1_Y <- data1_Y %>% mutate(monthly_bk_loan_rate = monthly_bk_loan/total_loan1)
+data1_Y %>% ggplot(aes(x=ages, y=monthly_bk_loan/total_loan1, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() + 
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 은행업종 총 대출금액 비율")
+```
+
++ 20대와 90대를 제외하면 남자가 여자에 비해 은행업종 총 대출금액 비율이 높다. 20대는 여자가 더 높고 90대는 비슷했다. 10대 남자의 경우 은행업종 총 대출금액 비율이 20대보다 높게 나타났지만 10대 여자의 경우 전체 그룹 중 가장 낮게 나타났다.
+
+
+> End of Tab
+
+---
+
+### 카드업종 총 대출금액(monthly_cd_loan)
+
+카드업종 총 대출금액:	카드업종으로부터 KCB에 등록된 대출개설정보 중 개인대출정보의 대출금액의 합
+
+```{r monthly_cd_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_cd_loan=mean(monthly_cd_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_cd_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 카드업종 총 대출금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 대전, 부산의 카드업중 대출 금액의 지역별 평균값은 다른 지역에 비해 큰 편이다.
+
+```{r monthly_cd_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_cd_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 카드업종 총 대출금액")
+```
+
++ 카드업종 총 대출금액의 연령대에 따른 패턴은 모든 지역에서 거의 비슷하게 나타났는데, 40대까지 증가하다가 50대부터 계속 감소하는 패턴이다.
+
+```{r monthly_cd_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_cd_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 카드업종 총 대출금액")
+```
+
++ 카드업종 총 대출금액은 60대에서 지역에 따른 편차가 가장 크게 나타났고, 대체로 수도권과 광역시에서 크게 나타났다.
+
++ 제주의 카드업종 총 대출금액이 전국에서 가장 낮은 편이다.
+
+```{r monthly_cd_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_cd_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 카드업종 총 대출금액")
+```
+
++ 10대와 90대를 제외하면 대체로 여자가 남자에 비해 카드업종 총 대출금액이 크다. 10대는 남자가 여자보다 카드업종 총 대출금액이 크고, 90대는 비슷했다.
+
+---
+
+다음으로 카드업종 총 대출금액 비율을 계산하여 살펴보았다.
+
+```{r monthly_cd_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(monthly_cd_loan_rate = monthly_cd_loan/total_loan1)
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_cd_loan_rate=mean(monthly_cd_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_cd_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 카드업종 총 대출금액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 인천, 대전, 전북, 부산의 카드업종 대출금액 비율의 지역별 평균이 높게 나타났다.
+
+```{r monthly_cd_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_cd_loan_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 카드업종 총 대출금액 비율")
+```
+
++ 카드업종 대출금액 비율의 연령대에 따른 패턴은 지역별로 크게 다르지 않았다.
+
++ 연령대가 증가 할수록 카드 대출 비율은 낮아진다.
+
+```{r monthly_cd_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_cd_loan_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 카드업종 총 대출금액 비율")
+```
+
++ 전체 대출 금액 중 카드 대출의 비율은 매우 낮고, 지역에 따른 차이는 크지 않았다.
+
+```{r monthly_cd_loan9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_cd_loan/total_loan1, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() + 
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 카드업종 총 대출금액 비율")
+```
+
++ 10대와 90대를 제외하면 전반적으로 여자의 카드업총 대출금액 비율이 남자보다 높다. 10대는 남자가 여자에 비해 높았고, 90대는 비슷했다.
+
+> End of Tab
+
+---
+
+### 할부금융업종 총 대출금액(monthly_installments_loan)	
+
+할부금융업종 총 대출금액 : 할부금융업종으로부터 KCB에 등록된 대출개설정보 중 개인대출정보의 대출금액의 합
+
+```{r monthly_installments_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_installments_loan=mean(monthly_installments_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_installments_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 할부금융업종 총 대출금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 할부금융업종 총 대출금액의 지역별 평균은 강원, 충남, 충북이 다른 지역에 비해 크게 나타났다.
+
+```{r monthly_installments_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_installments_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 할부금융업종 총 대출금액")
+```
+
++ 할부금융업종 대출금액의 연령대에 따른 패턴은 지역별로 크게 다르지 않았다. 40대까지 증가하다가 그 이후에는 감소하는 패턴을 보인다.
+
+```{r monthly_installments_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_installments_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 할부금융업종 총 대출금액")
+```
+
++ 30대 ~ 60대에서 울산, 강원, 충남, 충북, 제주의 할부금융업종 총 대출금액이 크다.
+
++ 서울의 할부금융업종 총 대출금액이 전반적으로 가장 낲은데, 90대에서는 가장 높게 나타난다.
+
++ 10대에서는 서울, 부산, 제주의 할부금융업종 총 대출금액이 낮은 편이다.
+
+```{r monthly_installments_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_installments_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 할부금융업종 총 대출금액")
+```
+
++ 전반적으로 남자가 여자에 비해 할부금융업종 총 대출금액이 크다.
+
+---
+
+할부금융업종 총 대출금액 비율을 계산하여 살펴보았다.
+
+```{r monthly_installments_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(monthly_installments_loan_rate = monthly_installments_loan/total_loan1)
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_installments_loan_rate=mean(monthly_installments_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_installments_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 할부금융업종 총 대출금액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 강원, 충남, 충북, 전남, 전북이 다른 지역에 비해 할부금융업종 대출금액 비율의 지역별 평균이 높게 나타났다.
+
+```{r monthly_installments_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_installments_loan_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 할부금융업종 총 대출금액 비율")
+```
+
++ 할부금융업종 대출금액 비율은 전반적으로 연령대가 증가할수록 감소하는 패턴을 보이는데, 제주의 경우 10대의 할부금융업종 총 대출금액 비율이 다른 지역에 비해 상당히 낮게 나타났다.
+
+```{r monthly_installments_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_installments_loan_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 할부금융업종 총 대출금액 비율")
+```
+
++ 10대와 20대의 할부금융업종 대출금액 비율이 다른 연령대에 비해 높은 편이다.
+
+```{r monthly_installments_loan9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_installments_loan/total_loan1, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 할부금융업종 총 대출금액 비율")
+```
+
++ 10대와 20대에서 남자와 여자의 할부금융업종 총 대출금액 비율의 차이가 다른 연령대에 비해 크게 나타났다. 다른 연령대에서는 성별에 따른 차이가 거의 없었다.
+
+> End of Tab
+
+---
+
+### 보험업종 총 대출금액(monthly_insurance_loan)	
+
+보험업종 총 대출금액 : 보험업종으로부터 KCB에 등록된 대출개설정보 중 개인대출정보의 대출금액의 합
+
+```{r monthly_insurance_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_insurance_loan=mean(monthly_insurance_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_insurance_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 보험업종 총 대출금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 인천, 울산, 부산의 보험업종 총 대출금액의 지역별 평균이 다른 지역에 비해 크다.
+
+```{r monthly_insurance_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_insurance_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 보험업종 총 대출금액")
+```
+
++ 제주 80대와 대전 90대의 보험업종 총 대출금액이 다른 지역의 같은 연령대에 비해 큰 편이다. 
+
+```{r monthly_insurance_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_insurance_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 보험업종 총 대출금액")
+```
+
++ 30대와 40대에서 울산의 보험업종 총 대출금액 다른 지역보다 크게 나타났다.
+
+```{r monthly_insurance_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_insurance_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 보험업종 총 대출금액")
+```
+
++ 10대를 제외하면 여자가 남자보다 보험업종 총 대출금액이 크다. 10대는 남자가 여자보다 보험업종 총 대출금액이 크게 나타났다.
+
+---
+
+보험업종 총 대출금액 비율을 계산하여 살펴보았다.
+
+```{r monthly_insurance_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(monthly_insurance_loan_rate = monthly_insurance_loan/total_loan1)
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_insurance_loan_rate=mean(monthly_insurance_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_insurance_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 보험업종 총 대출금액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 울산과 부산의 보험업종 총 대출금액 비율의 지역별 평균이 다른 지역에 비해 크다.
+
+```{r monthly_insurance_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_insurance_loan_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 보험업종 총 대출금액 비율")
+```
+
+```{r monthly_insurance_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_insurance_loan_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 보험업종 총 대출금액 비율")
+```
+
+```{r monthly_insurance_loan9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_insurance_loan/total_loan1, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 보험업종 총 대출금액 비율")
+```
+
++ 10대를 제외하면 여자의 보험업종 대출금액 비율이 남자에 비해 높다.
+
+> End of Tab
+
+---
+
+### 저축은행업종 총 대출금액(monthly_sbk_loan)	
+
+저축은행업종 총 대출금액 : 저축은행업종으로부터 KCB에 등록된 대출개설정보 중 개인대출정보의 대출금액의 합
+
+```{r monthly_sbk_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_sbk_loan=mean(monthly_sbk_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_sbk_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 저축은행업종 총 대출금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 저축은행업종 총 대출금액의 지역별 평균값은 서울, 경기, 인천, 대전, 부산에서 높게 나타났다.
+
+
+```{r monthly_sbk_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_sbk_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 저축은행업종 총 대출금액")
+```
+
++ 저축은행업종 총 대출금액의 연령대에 따른 패턴은 지역별로 크게 다르지 않았다. 연령대가 증가할수록 저축은행업종 총 대출금액이 감소하는 추세를 보인다.
+
+```{r monthly_sbk_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_sbk_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 저축은행업종 총 대출금액")
+```
+
++ 10대에서 부산, 경북, 전남, 전북, 제주의 저축은행 업종 총 대출금액이 크게 나타났다.
+
+```{r monthly_sbk_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_sbk_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 저축은행업종 총 대출금액")
+```
+
++ 30대 ~ 50대 까지는 남자의 저축은행업종 총 대출금액이 여자보다 큰 편이고, 70대 ~ 90대에서는 여자가 남자보다 큰 편이다. 10대 여자의 저축은행 총 대출금액이 매우 크게 나타났다.
+
+---
+
+이어서 저축은행 업종 대출금액 비율을 살펴보았다. 
+
+```{r monthly_sbk_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(monthly_sbk_loan_rate = monthly_sbk_loan/total_loan1)
+temp <- data1_L %>% group_by(id) %>% summarise(monthly_sbk_loan_rate=mean(monthly_sbk_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=monthly_sbk_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 저축은행업종 총 대출금액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 전남, 광주, 전북, 경북, 부산, 강원이 대체로 저축은행업종 대출금액 비율의 지역별 평균값이 높게 나타났다.
+
+```{r monthly_sbk_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=monthly_sbk_loan_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 저축은행업종 총 대출금액 비율")
+```
+
++ 10대의 저축은행 대출금액 비율이 다른 연령대에 비해 상당히 큰 편이며, 연령대가 증가할수록 저축은행 대출금액 비율은 작아지는 패턴을 보인다. 
+
+```{r monthly_sbk_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=monthly_sbk_loan_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 저축은행업종 총 대출금액 비율")
+```
+
++ 10대 부산, 경북, 전남, 전북에서 저축은행 업종 대출금액 비율이 높게 나타났다.
+
+```{r monthly_sbk_loan9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=monthly_sbk_loan/total_loan1, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 저축은행업종 총 대출금액 비율")
+```
+
++ 전반적으로 여자의 저축은행업종 대출금액 비율이 남자에 비해 높게 나타났다.
+
+> End of Tab
+
+---
+
+### 한도대출 총 약정금액(loan_commitment)	
+
+한도대출 총 약정금액 : KCB에 등록된 대출개설정보 중 거래형태코드가 한도대출로 등록된 개인대출정보 약정금액의 합
+
+```{r loan_commitment1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(loan_commitment=mean(loan_commitment))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=loan_commitment)) + 
+  geom_polygon(color="white") + labs(title="지역별 한도대출 총 약정금액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 한도대출 총 약정금액의 지역별 평균값은 울산이 특히 높게 나타났다.
+
+```{r loan_commitment3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=loan_commitment, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 한도대출 총 약정금액")
+```
+
++ 서울, 경기, 인천, 부산의 연령대에 따른 패턴이 유사하다. 울산에서 연령대 증가에 따른 한도대출 총 약정금액이 가장 가파르게 증가하는 것을 볼 수 있다.
+
+```{r loan_commitment4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=loan_commitment, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 한도대출 총 약정금액")
+```
+
++ 40~60대에서 제주가 한도대출 총 약정금액이 다른 지역에 비해 크게 나타났다. 
+
++ 70대와 80대에서는 울산의 한도대출 총 약정금액이 다른 지역에 비해 크게 나타났다.
+
+```{r loan_commitment5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=loan_commitment, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 한도대출 총 약정금액")
+```
+
++ 전반적으로 남자의 한도대출 총 약정금액이 여자에 비해 크고, 20대와 30대에서 보다 40대 이상에서 그 격차가 더 크게 나타났다.
+
+---
+
+다음으로 한도대출 총 약정금액 비율을 살펴보았다.
+
+```{r loan_commitment6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(loan_commitment_rate = loan_commitment/total_loan2)
+temp <- data1_L %>% group_by(id) %>% summarise(loan_commitment_rate=mean(loan_commitment_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=loan_commitment_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 한도대출 총 약정금액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 한도대출 총 약정금액 비율의 지역별 평균은 강원 충북, 경북, 전북, 전남, 광주에서 크게 나타났다.
+
+```{r loan_commitment7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=loan_commitment_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 한도대출 총 약정금액 비율")
+```
+
++ 연령대가 증가할수록 감소하는 패턴(서울, 울산), 연령대가 증가함에 따라 증가하다가 감소하는 패턴(서울, 울산을 제외한 나머지 지역)으로 나누어 볼 수 있다.
+
+```{r loan_commitment8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=loan_commitment_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 한도대출 총 약정금액 비율")
+```
+
++ 10대와 90대는 시기에 따른 변동이 큰 편이다.
+
++ 연령대별로 비율이 높게 나타나는 지역이 다르다. 70대까지는 주로 강원이 높게 나타났고, 80대에서는 울산이 높게 나타났다.
+
+```{r loan_commitment9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=loan_commitment/total_loan2, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 한도대출 총 약정금액 비율")
+```
+
++ 전반적으로 남자의 한도대출 총 약정금액 비율이 여자에 비해 크다.
+
+> End of Tab
+
+---
+
+### 분할상환대출 총 대출잔액(inst_rep_loanb)	
+
+분할상환대출 총 대출잔액 : KCB에 등록된 대출개설정보 중 거래형태코드가 분할상환(원리금균등, 원금균등, 거치상환등)으로 등록된 개인대출정보 대출잔액의합
+
+```{r inst_rep_loanb1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(inst_rep_loanb=mean(inst_rep_loanb))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=inst_rep_loanb)) + 
+  geom_polygon(color="white") + labs(title="지역별 분할상환대출 총 대출잔액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 인천의 분할상환대출 총 대출잔액의 지역별 평균이 크게 나타났다.
+
+```{r inst_rep_loanb3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=inst_rep_loanb, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 분할상환대출 총 대출잔액")
+```
+
++ 분할상환대출 총 대출잔액은 대체로 40대까지 증가하다가 50대부터는 감소하는 패턴을 보인다. 대부분의 지역에서는 90대에 가까워질수록 분할상환대출 총 대출잔액이 낮은 편인데, 서울과 경기는 80대, 90대의 분할상환대출 총 대출잔액도 상당히 크게 나타났다.
+
+```{r inst_rep_loanb4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=inst_rep_loanb, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 분할상환대출 총 대출잔액")
+```
+
++ 전반적으로 수도권과 광역시들의 분할상환대출 총 대출잔액이 다른 지역에 비해 크게 나타났다.
+
+```{r inst_rep_loanb5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=inst_rep_loanb, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() + 
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 분할상환대출 총 대출잔액")
+```
+
++ 10대 ~ 60대에서는 남자의 분할상환대출 총 대출잔액이 여자보다 크게 나타났고, 80대와 90대에서는 여자의 분할상환대출 총 대출잔액이 남자보다 크게 나타났다.
+
+---
+
+다음으로 분할상환대출 총 대출잔액 비율을 살펴보았다.
+
+```{r inst_rep_loanb6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(inst_rep_loanb_rate = inst_rep_loanb/total_loan2)
+temp <- data1_L %>% group_by(id) %>% summarise(inst_rep_loanb_rate=mean(inst_rep_loanb_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=inst_rep_loanb_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 분할상환대출 총 대출잔액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 인천, 부산의 분할상환대출 총 대출잔액 비율의 지역별 평균이 높게 나타났고, 그 중 인천이 특히 높다.
+
+```{r inst_rep_loanb7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=inst_rep_loanb_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 분할상환대출 총 대출잔액 비율")
+```
+
+```{r inst_rep_loanb8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=inst_rep_loanb_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 분할상환대출 총 대출잔액 비율")
+```
+
++ 분할상환대출 총 대출잔액 비율은 연령대가 증가할수록 감소한다.
+
+```{r inst_rep_loanb9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=inst_rep_loanb/total_loan2, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 분할상환대출 총 대출잔액 비율")
+```
+
++ 10대와 20대를 제외한 전 연령대에서 여자가 남자보다 분할상환대출 총 대출잔액 비율이 높다. 분할상환대출 총 대출잔액은 남자가 여자보다 높은 편인데 비율이 더 낮은 이유는 거래형태 코드 중 한도대출 총 약정금액이 차지하는 비율이 남자가 여자보다 상당히 높기 때문이다.
+
+> End of Tab
+
+---
+
+### 일시상환대출 총 대출잔액(ls_rep_loanb)
+
+일시상환대출 총 대출잔액 : KCB에 등록된 대출개설정보 중 거래형태코드가 일시상환으로 등록된 개인대출정보 대출잔액의 합
+
+```{r ls_rep_loanb1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(ls_rep_loanb=mean(ls_rep_loanb))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=ls_rep_loanb)) + 
+  geom_polygon(color="white") + labs(title="지역별 일시상환대출 총 대출잔액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 일시상황대출 총 대출잔액의 지역별 평균은 서울, 경기, 제주에서 높게 나타났다. 
+
+```{r ls_rep_loanb3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=ls_rep_loanb, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 일시상환대출 총 대출잔액")
+```
+
++ 서울, 경기, 인천, 부산, 대구, 대전은 연령대가 증할수록 일시상환대출 총 대출잔액도 증가하는 패턴을 보였고, 서울이 특히 가파른 상승폭을 보인다.
+
++ 경남, 경북, 전남, 전북, 제주는 50대까지 증가하다가 60대 이후로 감소하는 패턴을 보인다.
+
++ 광주, 충남, 충북, 강원은 50대까지 증가하다 감소하는 패턴이지만 90대에서 소폭 증가하는 패턴을 보인다.
+
+```{r ls_rep_loanb4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=ls_rep_loanb, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 일시상환대출 총 대출잔액")
+```
+
++ 40대 ~ 60대에서 제주의 일시상환대출 총 대출잔액이 다른 지역에 비해 크게 나타났다. 90대에서는 서울, 경기의 일시상환대출 총 대출잔액이 매우 크게 나타났다.
+
+
+```{r ls_rep_loanb5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=ls_rep_loanb, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 일시상환대출 총 대출잔액")
+```
+
++ 전반적으로 남자의 일시상환대출 총 대출잔액이 여자의 일시상환대출 총 대출잔액보다 큼
+
+---
+
+다음으로 일시상환대출 총 대출잔액 비율을 살펴보았다.
+
+```{r ls_rep_loanb6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(ls_rep_loanb_rate = ls_rep_loanb/total_loan2)
+temp <- data1_L %>% group_by(id) %>% summarise(ls_rep_loanb_rate=mean(ls_rep_loanb_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=ls_rep_loanb_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 일시상환대출 총 대출잔액 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 일시상환대출 총 대출잔액 비율의 평균값은 제주에서 특히 높게 나타났다.
+
+```{r ls_rep_loanb7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=ls_rep_loanb_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 일시상환대출 총 대출잔액 비율")
+```
+
++ 서울 경기, 인천, 부산, 울산, 대구, 대전, 광주, 경남, 충남은 일시상환대출 총 대출잔액 비율이 40대까지 감소하다 50대부터 증가하는 패턴을 보인다.
+
++ 경북, 충북, 전남, 전북, 강원 ,제주는 연량대가 증가할수록 일시상환대출 총 대출잔액 비율도 증가하는 패턴을 보인다.
+
+```{r ls_rep_loanb8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=ls_rep_loanb_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 일시상환대출 총 대출잔액 비율")
+```
+
++ 일시상환대출 총 대출잔액 비율은 10대와 90대에서 시간에 따른 변동이 크다. 10대에서는 서울이 높고, 30대 ~ 80대까지는 제주가 높은 것이 눈에 띈다.
+
+```{r ls_rep_loanb9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=ls_rep_loanb/total_loan2, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 일시상환대출 총 대출잔액 비율")
+```
+
++ 대체로 여자가 남자보다 일시상환대출 총 대출잔액 비율이 높게 나타났다. 일시상환대출 총 대출잔액은 남자가 여자보다 높은 편인데 비율이 더 낮은 이유는 거래형태 코드 중 한도대출 총 약정금액이 차지하는 비율이 남자가 여자보다 상당히 높기 때문이다.
+
+> End of Tab
+
+---
+
+### 신용대출 대출금액 총합(credit_loan)
+
+신용대출 대출금액 총합 : KCB에 등록된 대출개설정보 중 신용대출의 대출금액의 합
+
+```{r credit_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(credit_loan=mean(credit_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=credit_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 신용대출 대출금액 총합") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 신용대출 대출금액 총합의 지역별 평균은 서울에서 특히 크게 나타났다.
+
+```{r credit_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=credit_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용대출 대출금액 총합")
+```
+
++ 대체로 40대까지 증가하다가 50대 부터는 감소하는 패턴을 보인다. 서울, 경기, 부산, 대전, 경남은 90대의 신용대출 대출금액 총합이 증가하는 특징이 있다.
+
+```{r credit_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=credit_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용대출 대출금액 총합")
+```
+
++ 서울 90대의 신용대출 대출금액 총합이 다른 그룹에 비해 상당히 크게 나타났다.
+
+```{r credit_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=credit_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 신용대출 대출금액 총합")
+```
+
++ 신용대출 대출금액 총합은 대체로 남자가 여자보다 크다. 
+
+---
+
+다음으로 신용대출 대출금액 총합의 비율을 살펴보았다.
+
+```{r credit_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(credit_loan_rate = credit_loan/total_loan3)
+temp <- data1_L %>% group_by(id) %>% summarise(credit_loan_rate=mean(credit_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=credit_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 신용대출 대출금액 총합 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 강원, 전북, 전남, 광주의 신용대출 대출금액 총합 비율의 평균값이 높게 나타난다.
+
+
+```{r credit_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=credit_loan_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용대출 대출금액 총합 비율")
+```
+
++ 연령대가 증가할수록 신용대출 비율이 감소하는 패턴을 보인다. 서울, 대전, 경남, 전북, 제주는 90대에서 증가하는 패턴을 보인다.
+
+```{r credit_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=credit_loan_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 신용대출 대출금액 총합 비율")
+```
+
++ 10대와 90대는 시기에 따른 신용대출 대출금액 총합 비율의 변동이 심하다.
+
++ 10대에서 신용대출 대출금액 비율이 가장 높은 편인데 서울과 제주는 낮게 나타나고, 90대에서는 서울과 제주가 높게 나타난다.
+
+```{r credit_loan9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=credit_loan/total_loan3, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 신용대출 대출금액 총합 비율")
+```
+
++ 70대까지는 남자의 신용대출 대출금액 총합 비율이 여자보다 높게 나타나고, 80대와 90대는 여자가 남자보다 더 높게 나타난다.
+
+> End of Tab
+
+---
+
+### 담보대출 대출금액 총합(mortgage_loan)
+
+담보대출 대출금액 총합 : KCB에 등록된 대출개설정보 중 담보대출의 대출금액의 합
+
+```{r mortgage_loan1, fig.width=5, fig.height=4}
+temp <- data1_L %>% group_by(id) %>% summarise(mortgage_loan=mean(mortgage_loan))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=mortgage_loan)) + 
+  geom_polygon(color="white") + labs(title="지역별 담보대출 대출금액 총합") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기의 담보대출 대출금액 총합의 지역별 평균이 크게 나타났다.
+
+```{r mortgage_loan3, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=mortgage_loan, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 담보대출 대출금액 총합")
+```
+
++ 대체로 담보대출 대출금액 총합은 50대까지 증가하다 그 이후로 감소하는 패턴을 보였는데, 서울과 경기는 연령대가 증가함에따라 담보대출 대출금액 총합도 증가하는 패턴을 보인다.
+
+```{r mortgage_loan4, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=mortgage_loan, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 담보대출 대출금액 총합")
+```
+
++ 전 연령대에서 서울의 담보대출 대출금액 총합이 가장 크다. 
+
++ 제주의 담보대출 대출금액 총합도 대체로 큰 편인데, 90대에서는 작은 것이 특징이다.
+
+```{r mortgage_loan5, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=mortgage_loan, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 담보대출 대출금액 총합")
+```
+
++ 담보대출 대출금액 총합은 대체로 남자가 여자보다 크다. 
+
+---
+
+이어서 담보대출 대출금액 총합의 비율을 살펴보았다.
+
+```{r mortgage_loan6, fig.width=5, fig.height=4}
+data1_L <- data1_L %>% mutate(mortgage_loan_rate = mortgage_loan/total_loan3)
+temp <- data1_L %>% group_by(id) %>% summarise(mortgage_loan_rate=mean(mortgage_loan_rate))
+merge_result <- inner_join(korea_map, temp, by = "id")
+merge_result %>% ggplot(aes(x=long, y=lat, group=group, fill=mortgage_loan_rate)) + 
+  geom_polygon(color="white") + labs(title="지역별 담보대출 대출금액 총합 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(), aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
++ 서울, 경기, 인천, 대구, 울산의 담보대출 대출금액 총합 비율의 지역별 평균값이 높게 나타났다.
+
+```{r mortgage_loan7, fig.width=13, fig.height=12}
+data1_L %>% ggplot(aes(x=ages, y=mortgage_loan_rate, fill=ages)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_fill_tableau() +
+  facet_wrap(~city, ncol=4, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 담보대출 대출금액 총합 비율")
+```
+
++ 연령대가 증가할수록 담보대출 대출금액 비율도 높아지는 패턴을 보인다.
+
+```{r mortgage_loan8, fig.width=10, fig.height=9}
+data1_L %>% ggplot(aes(x=city, y=mortgage_loan_rate, fill=city)) +
+  geom_boxplot(alpha=0.7) + theme_bw() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=20),
+        axis.text.x = element_text(angle=90, vjust=0.3, size=12)) +
+  facet_wrap(~ages, ncol=3, labeller=label_both, scales='free_x') +
+  ggtitle("지역별 연령대별 담보대출 대출금액 총합 비율")
+```
+
++ 서울 10대의 담보대출 대출금액 총합 비율이 다른 지역에 비해 높은 편이다.
+
+```{r mortgage_loan9, fig.width=6, fig.height=4}
+data1_Y %>% ggplot(aes(x=ages, y=mortgage_loan/total_loan3, fill=sex)) +
+  geom_boxplot(alpha=0.3) + theme_bw() +
+  scale_fill_fivethirtyeight() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별 연령대별 담보대출 대출금액 총합 비율")
+```
+
++ 70대까지는 여자의 담보대출 대출금액 총합 비율이 남자에 비해 높고, 80대와 90대에서는 남자의 담보대출 대출금액 총합 비율이 여자보다 높다.
+
+> End of Tab
+
+---
+
+## 지역별 추세 {.tabset}
+
+`Date` 타입의 변수(date)를 만들어 각 변수들의 월별 추세를 확인해보았다. `Date` 타입을 만들기 위해 각 월의 1일을 상정하였다. 먼저 지역별 추세를 확인해보기 위해 city와 date를 기준으로 변수들의 평균값을 구하였다. 
+
+```{r city_trend1}
+data1_L <- data1_L %>% mutate(date=ifelse(nchar(month)==1, 
+                                          paste(year, paste0(0, month), "01", sep="-"),
+                                          paste(year, month, "01", sep="-")))
+
+data1_L$date <- as.Date(data1_L$date, "%Y-%m-%d")
+temp <- data1_L %>% dplyr::select(city, date, num_var) %>% group_by(city, date) %>% summarise_all(mean)
+```
+
+### 신용점수 & 신용등급
+
+```{r city_trend2}
+avgScore <- temp %>% dplyr::select(date, city, avg_score) %>%
+  ggplot(aes(x = date, y = avg_score)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 평균 신용점수 추세")
+ggplotly(avgScore, width = 600, height=400)
+```
+
++ 평균 신용점수의 지역별 평균값은 시간이 지남에 따라 증가하는 추세를 보였는데 제주의 경우 2017년 7월 이후에 감소하는 추세를 보인다.
+
+```{r city_trend3}
+# avg_rat
+avgRat <- temp %>% dplyr::select(date, city, avg_rat) %>% 
+  ggplot(aes(x = date, y = avg_rat)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 평균 신용등급 추세")
+ggplotly(avgRat, width = 600, height=400)
+```
+
++ 평균 신용등급의 지역별 평균값은 시간이 지남에 따라 좋아지는 추세를 보인다.
+
+> End of Tab
+
+---
+
+### 카드이용
+
+```{r city_trend4}
+# num_opencard 총 개설 카드수
+numCard <- temp %>% dplyr::select(date,city, num_opencard) %>%
+  ggplot(aes(x = date, y = num_opencard)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 총 개설 카드수 추세")
+ggplotly(numCard, width = 600, height=400)
+```
+
++ 2017년 2월에 모든 지역에서 총 개설 카드수의 상승폭이 컸고, 제주의 총 개설 카드수는 2017년 8월에 큰 폭의 상승이 있었다.
+
+```{r city_trend5}
+# num_usecard 실제 사용 카드수
+useCard <- temp %>% dplyr::select(date,city, num_usecard) %>% 
+  ggplot(aes(x = date, y = num_usecard)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 실제 사용 카드수 추세")
+ggplotly(useCard, width = 600, height=400)
+```
+
++ 실제 사용 카드수는 꾸준히 증가하는 추세를 보이고, 2017년 2월에 크게 증가한 것을 알 수 있다.
+
+```{r city_trend6}
+# monthly_card_spend 월 카드 총 이용금액               
+card1 <- temp %>% dplyr::select(date,city, monthly_card_spend) %>% 
+  ggplot(aes(x = date, y = monthly_card_spend)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 월 카드 총 이용금액 추세")
+ggplotly(card1, width = 600, height=400)
+```
+
++ 월 카드 총 이용금액은 전반적으로 증가하는 추세이다.
+
+```{r city_trend7}
+# credit_card_payment 신용카드 일시불 이용금액                         
+card2 <- temp %>% dplyr::select(date,city, credit_card_payment) %>% 
+  ggplot(aes(x = date, y = credit_card_payment)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 신용카드 일시불 이용금액 추세")
+ggplotly(card2, width = 600, height=400)
+```
+
++ 신용카드 일시불 이용금액은 전반적으로 증가하는 추세이다.
+
+```{r city_trend8}
+# credit_card_installments_payment             (??? 왜이렇게 생김?)
+card3 <- temp %>% dplyr::select(date,city, credit_card_installments_payment) %>%
+  ggplot(aes(x = date, y = credit_card_installments_payment)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 신용카드 할부 이용금액 합 추세")
+ggplotly(card3, width = 600, height=400)
+```
+
++ 신용카드 할부 이용금액 합은 전반적으로 전반적으로 증가하는 추세이다.
+
+> End of Tab
+
+---
+
+### 총 대출약정금액 & 총 대출금액
+
+```{r city_trend9}
+# monthly_lc
+mLc <- temp %>% dplyr::select(date,city, monthly_lc) %>%
+  ggplot(aes(x = date, y = monthly_lc)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 총 대출약정금액 추세")
+ggplotly(mLc, width = 600, height=400)
+```
+
++ 대부분의 지역에서 총 대출약정금액이 증가하는 추세를 보이며 제주가 가장 가파르게 증가했다.
+
++ 충북은 2017년 3월에 증가했다가 2017년 7월에 감소하는 추세를 보인다.
+
+```{r city_trend10}
+# monthly_loan 총대출금액                     
+mLoan <- temp %>% dplyr::select(date,city, monthly_loan) %>% 
+  ggplot(aes(x = date, y = monthly_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 총 대출금액 추세")
+ggplotly(mLoan, width = 600, height=400)
+```
+
++ 총 대출금액도 대부분의 지역에서 증가하는 추세를 보이며 제주가 가장 가파르게 증가했다.
+
++ 충북은 2017년 3월에 증가했다가 2017년 7월에 감소하는 추세를 보인다.
+
+> End of Tab
+
+---
+
+### 대출업종별 대출금액
+
+```{r city_trend11}
+# monthly_bk_loan                              
+mBkLoan <- temp %>% dplyr::select(date,city, monthly_bk_loan) %>% 
+  ggplot(aes(x = date, y = monthly_bk_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 은행업종 총 대출금액 추세")
+ggplotly(mBkLoan, width = 600, height=400)
+```
+
++ 대부분의 지역은 시간의 흐름에 관계없이 일정한 추세를 보였는데, 제주만 꾸준히 증가하는 추세를 보인다. 충북은 총 대출금액과 마찬가지로 2017년 3월에 증가했다가 2017년 7월에 감소하는 패턴을 보인다.
+
+```{r city_trend12}
+# monthly_cd_loan                           
+mCdLoan <- temp %>% dplyr::select(date,city,  monthly_cd_loan) %>% 
+  ggplot(aes(x = date, y =  monthly_cd_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 카드업종 총 대출금액 추세")
+ggplotly(mCdLoan, width = 600, height=400)
+```
+
++ 카드업종 총 대출금액은 전 지역에서 꾸준히 증가하는 추세를 보인다.
+
+```{r city_trend13}
+# monthly_installments_loan                 
+mInstallLoan <- temp %>% dplyr::select(date,city, monthly_installments_loan) %>%
+  ggplot(aes(x = date, y = monthly_installments_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 할부금융업종 총 대출금액 추세")
+ggplotly(mInstallLoan, width = 600, height=400)
+```
+
++ 할부금융업종 총 대출금액도 전 지역에서 꾸준히 증가하는 추세를 보이는데 울산, 강원, 충남, 충북, 제주가 다른 지역에 비해 가파른 증가추세를 보인다.
+
+```{r city_trend14}
+# monthly_insurance_loan
+mInsurLoan <- temp %>% dplyr::select(date,city, monthly_insurance_loan) %>%
+  ggplot(aes(x = date, y = monthly_insurance_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 보험업종 총 대출금액 추세")
+ggplotly(mInsurLoan, width = 600, height=400)
+```
+
++ 대부분의 지역은 보험업종 총 대출금액에 큰 변화가 없는데, 울산, 부산, 대구는 증가하는 추세를 보인다.
+
++ 제주의 경우 2016년 3월에 크게 증가한 후에는 큰 변화가 없었다.
+
+```{r city_trend15}
+# monthly_sbk_loan                            
+mSbkLoan <- temp %>% dplyr::select(date,city, monthly_sbk_loan) %>% 
+  ggplot(aes(x = date, y = monthly_sbk_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 저축은행업종 총 대출금액 추세")
+ggplotly(mSbkLoan, width = 600, height=400)
+```
+
++ 저축은행업종 총 대출금액은 대부분의 지역에서 증가하다가 2017년 2월이나 3월 이후부터 감소하거나 증가추세가 완만해지는 패턴을 보인다.
+
+
+> End of Tab
+
+---
+
+### 한도대출/일시상환/분할상환
+
+```{r city_trend16}
+# loan_commitment
+loanCommit <- temp %>% dplyr::select(date,city, loan_commitment) %>% 
+  ggplot(aes(x = date, y = loan_commitment)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 한도대출 총 약정금액 추세")
+ggplotly(loanCommit, width = 600, height=400)
+```
+
++ 지역별 한도대출 총 약정금액은 시기에 따라 변화가 크지 않은데, 울산의 경우 2017년 3월까지 크게 증가하다가 2017년 4월부터 감소하는 추세를 보인다.
+
+```{r city_trend17}
+# inst_rep_loanb
+instRep <-  temp %>% dplyr::select(date,city, inst_rep_loanb) %>%
+  ggplot(aes(x = date, y = inst_rep_loanb)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 분할상환대출 총 대출잔액 추세")
+ggplotly(instRep, width = 600, height=400)
+```
+
++ 지역별 분할상환대출 총 대출잔액은 완만한 증가추세를 보였는데 제주가 다른 지역에 비해 가파르게 증가하는 모습을 보인다.
+
+```{r city_ternd18}
+# ls_rep_loanb                                 
+lsRep <- temp %>% dplyr::select(date,city, ls_rep_loanb) %>%
+  ggplot(aes(x = date, y = ls_rep_loanb)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 일시상환대출 총 대출잔액 추세")
+ggplotly(lsRep, width = 600, height=400)
+```
+
++ 일시상환대출 총 대출잔액은 대부분의 지역에서 시기에 따른 변화가 크지 않은데, 제주는 증가하는 추세를 보였고, 충북은 2017년 3월에 크게 증가했다가 2017년 7월에 다시 같은 폭으로 감소하였다.
+
+> End of Tab
+
+---
+
+### 신용/담보
+
+```{r city_trend19}
+# credit_loan                                 
+credit <- temp %>% dplyr::select(date, city, credit_loan) %>%
+  ggplot(aes(x = date, y = credit_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 신용대출 대출금액 총합 추세")
+ggplotly(credit, width = 600, height=400)
+```
+
++ 지역별 신용대출 대출금액 총합은 전반적으로 완만하게 증가하는 추세를 보였는데, 제주는 2017년 1월까지 증가하다가 그 이후로 감소하는 추세를 보인다. 
+
+```{r city_trend20}
+# mortgage_loan담보대출대출금액               
+mortgage <- temp %>% dplyr::select(date,city, mortgage_loan) %>%
+  ggplot(aes(x = date, y = mortgage_loan)) +
+  geom_line(aes(color = city), size = 0.5) +
+  geom_point(aes(color = city), size = 0.5) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("지역별 담보대출 대출금액 총합 추세")
+ggplotly(mortgage, width = 600, height=400)
+```
+
++ 담보대출 대출금액은 전반적으로 큰 변화가 없었는데, 제주만 꾸준히 증가하는 추세를 보인다. 충북은 2017년 3월에 크게 증가했다가 2017년 7월에 다시 같은 폭으로 감소하였다.
+
+> End of Tab
+
+---
+
+## 연령대별 추세 {.tabset}
+
+```{r ages_trend1}
+temp <- data1_L %>% dplyr::select(ages, date, num_var) %>% group_by(ages, date) %>% summarise_all(mean)
+```
+
+### 신용등급 & 신용점수
+
+```{r ages_trend2}
+# avg_score
+avgScore <- temp %>% dplyr::select(date, ages, avg_score) %>%
+  ggplot(aes(x = date, y = avg_score)) +
+  geom_line(aes(color=ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() + 
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 평균 신용점수 추세")
+ggplotly(avgScore, width = 600, height=400)
+```
+
++ 평균 신용점수는 대부분의 연령대에서 완만한 증가추세를 보였는데, 10대에서만 감소와 증가를 반복하는 패턴을 보인다.
+
+```{r ages_trend3}
+# avg_rat
+avgRat <- temp %>% dplyr::select(date, ages, avg_rat) %>% 
+  ggplot(aes(x = date, y = avg_rat)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() + 
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 평균 신용등급 추세")
+ggplotly(avgRat, width = 600, height=400)
+```
+
++ 평균 신용등급은 대부분의 연령대에서 일정하게 유지되었는데, 30대 ~ 50대에서는 소폭 증가하는 모습을 보인다.
+
+> End of Tab
+
+---
+
+### 카드이용
+
+```{r ages_trend4}
+# num_opencard 총 개설 카드수
+numCard <- temp %>% dplyr::select(date,ages, num_opencard) %>%
+  ggplot(aes(x = date, y = num_opencard)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() + 
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 총 개설 카드수 추세")
+ggplotly(numCard, width = 600, height=400)
+```
+
++ 연령대별 총 개설 카드수는 시기에 관계없이 거의 일정한 추세를 보였는데, 2017년 2월에는 모든 지역에서 소폭 상승하였다.
+
+```{r ages_trend5}
+# num_usecard 실제 사용 카드수
+useCard <- temp %>% dplyr::select(date,ages, num_usecard) %>% 
+  ggplot(aes(x = date, y = num_usecard)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 실제 사용 카드수 추세")
+ggplotly(useCard, width = 600, height=400)
+```
+
++ 연령대별 실제 사용 카드수는 시기에 관계없이 거의 일정한 추세를 보였는데, 2017년 2월에는 모든 지역에서 소폭 상승하였다.
+
+```{r ages_trend6}
+# monthly_card_spend                          
+card1 <- temp %>% dplyr::select(date,ages, monthly_card_spend) %>% 
+  ggplot(aes(x = date, y = monthly_card_spend)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 월 카드 총 이용금액 추세")
+ggplotly(card1, width = 600, height=400)
+```
+
++ 월 카드 총 이용금액은 대부분의 연령에서 완만하게 증가하는 추세를 보였는데, 30대 ~ 50대에서는 월별 변동이 다른 연령대에 비해 심했다.
+
+```{r ages_trend7}
+# credit_card_payment                          (지역별 plot이랑 비슷하게 생김)
+card2 <- temp %>% dplyr::select(date,ages, credit_card_payment) %>% 
+  ggplot(aes(x = date, y = credit_card_payment)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 신용카드 일시불 이용금액 추세")
+ggplotly(card2, width = 600, height=400)
+```
+
++ 신용카드 일시불 이용금액도 월 카드 총 이용금액과 유사한 패턴을 보인다. 대부분의 연령에서 완만하게 증가하는 추세를 보였는데, 30대 ~ 50대에서는 월별 변동이 다른 연령대에 비해 심했다.
+
+```{r ages_trend8}
+# credit_card_installments_payment              
+card3 <- temp %>% dplyr::select(date,ages, credit_card_installments_payment) %>%
+  ggplot(aes(x = date, y = credit_card_installments_payment)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 신용카드 할부 이용금액 합 추세")
+ggplotly(card3, width = 600, height=400)
+```
+
++ 신용카드 할부 이용금액 합도 대부분의 연령에서 완만하게 증가하는 추세를 보였는데, 30대 ~ 60대에서는 월별 변동이 다른 연령대에 비해 심했다.
+
+> End of Tab
+
+---
+
+### 총 대출금액
+
+```{r ages_trend9}
+# monthly_lc
+mLc <- temp %>% dplyr::select(date,ages, monthly_lc) %>%
+  ggplot(aes(x = date, y = monthly_lc)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 총 대출약정금액 추세")
+ggplotly(mLc, width = 600, height=400)
+```
+
++ 10대를 제외한 모든 연령대에서 총 대출약정금액은 증가하는 추세를 보인다.
+
+```{r ages_trend10}
+# monthly_loan                    (90대)
+mLoan <- temp %>% dplyr::select(date,ages, monthly_loan) %>% 
+  ggplot(aes(x = date, y = monthly_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 총 대출금액 추세")
+ggplotly(mLoan, width = 600, height=400)
+```
+
++ 연령대별 총 대출금액은 10대와 90대를 제외한 모든 연령대에서 완만한 증가추세를 보인다. 
+
+
+> End of Tab
+
+---
+
+### 대출업종별 대출금액
+
+```{r ages_trend11}
+# monthly_bk_loan                             (90대)
+mBkLoan <- temp %>% dplyr::select(date,ages, monthly_bk_loan) %>% 
+  ggplot(aes(x = date, y = monthly_bk_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 은행업종 총 대출금액 추세")
+ggplotly(mBkLoan, width = 600, height=400)
+```
+
++ 연령대별 은행업종 총 대출금액은 10대와 90대를 제외한 모든 연령대에서 완만한 증가추세를 보인다.
+
+```{r ages_trend12}
+# monthly_cd_loan                             
+mCdLoan <- temp %>% dplyr::select(date,ages,  monthly_cd_loan) %>% 
+  ggplot(aes(x = date, y =  monthly_cd_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 카드업종 총 대출금액 추세")
+ggplotly(mCdLoan, width = 600, height=400)
+```
+
++ 10대와 90대를 제외한 모든 연령대에서 카드업종 총 대출금액이 증가하는 추세를 보였는데, 80대는 다른 연령대에 비해 증가폭이 작았다.
+
+```{r ages_trend13}
+# monthly_installments_loan                   
+mInstallLoan <- temp %>% dplyr::select(date,ages, monthly_installments_loan) %>%
+  ggplot(aes(x = date, y = monthly_installments_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 할부금융업종 총 대출금액 추세")
+ggplotly(mInstallLoan, width = 600, height=400)
+```
+
++ 할부금융업종 총 대출금액은 10대와 90대를 제외한 모든 연령대에서 증가하는 추세를 보였고, 30대 ~ 60대의 증가폭이 크다. 80대는 다른 연령대에 비해 증가폭이 작았다.
+
+```{r ages_trend14}
+# monthly_insurance_loan
+mInsurLoan <- temp %>% dplyr::select(date,ages, monthly_insurance_loan) %>%
+  ggplot(aes(x = date, y = monthly_insurance_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 보험업종 총 대출금액 추세")
+ggplotly(mInsurLoan, width = 600, height=400)
+```
+
++ 30대 ~ 60대에서 보험업종 총 대출금액이 증가하는 추세를 보인다.
+
+```{r ages_trend15}
+# monthly_sbk_loan                           
+mSbkLoan <- temp %>% dplyr::select(date,ages, monthly_sbk_loan) %>% 
+  ggplot(aes(x = date, y = monthly_sbk_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별	저축은행업종 총 대출금액 추세")
+ggplotly(mSbkLoan, width = 600, height=400)
+```
+
++ 전반적으로 저축은행업종 총 대출금액이 증가하는 추세인데, 10대의 경우 2017년 3월까지 가파르게 증가하다가 그 이후로 감소하는 패턴을 보인다.
+
+> End of Tab
+
+---
+
+### 한도대출/일시상환/분할상환
+
+```{r ages_trend16}
+# loan_commitment
+loanCommit <- temp %>% dplyr::select(date,ages, loan_commitment) %>% 
+  ggplot(aes(x = date, y = loan_commitment)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 한도대출 총 약정금액 추세")
+ggplotly(loanCommit, width = 600, height=400)
+```
+
++ 90대가 다른 연령대에 비해 한도대출 총 약정금액의 변화량이 크다. 2017년 1월부터 증가하는 추세를 보인다.
+
+```{r ages_trend17}
+# inst_rep_loanb
+instRep <-  temp %>% dplyr::select(date,ages, inst_rep_loanb) %>%
+  ggplot(aes(x = date, y = inst_rep_loanb)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 분할상환대출 총 대출잔액 추세")
+ggplotly(instRep, width = 600, height=400)
+```
+
++ 10대, 80대, 90대를 제외한 모든 연령대에서 분할상환대출 총 대출잔액이 증가하는 추세를 보인다. 특히, 30대 ~ 60대에서 증가폭이 크다.
+
+```{r ages_trend18}
+# ls_rep_loanb                                 (충북 대구 광주 이상)
+lsRep <- temp %>% dplyr::select(date,ages, ls_rep_loanb) %>%
+  ggplot(aes(x = date, y = ls_rep_loanb)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 일시상환대출 총 대출잔액 추세")
+ggplotly(lsRep, width = 600, height=400)
+```
+
++ 10대, 20대, 90대를 제외한 모든 연령대에서 일시상환대출 총 대출잔액은 완만한 증가추세를 보인다. 10대와 90대는 월별 변동이 심했다.
+
+### 신용/담보
+
+```{r ages_trend19}
+# credit_loan                                  (서울 압도적)
+credit <- temp %>% dplyr::select(date, ages, credit_loan) %>%
+  ggplot(aes(x = date, y = credit_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 신용대출 대출금액 총합 추세")
+ggplotly(credit, width = 600, height=400)
+```
+
++ 20대 ~ 60대에서 신용대출 대출금액이 증가추세를 보인다.
+
+```{r ages_trend20}
+# mortgage_loan담보대출대출금액                (충북 대구 광주 이상)
+mortgage <- temp %>% dplyr::select(date,ages, mortgage_loan) %>%
+  ggplot(aes(x = date, y = mortgage_loan)) +
+  geom_line(aes(color = ages), size = 0.5) +
+  geom_point(aes(color = ages), size = 0.5) +
+  theme_minimal() +
+  scale_color_tableau() +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 담보대출 대출금액 총합 추세")
+ggplotly(mortgage, width = 600, height=400)
+```
+
++ 10대와 90대를 제외한 모든 연령대에서 담보대출 대출금액 총합은 증가추세를 보인다.
+
+> End of Tab
+
+---
+
+## 상관분석
+
+```{r correlation1, fig.width=8, fig.height=8}
+cor.mat <- cor(data1_L[num_var])
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.mat, method = "ellipse", type="upper", diag=F, col=col(200),
+         tl.cex=0.7, tl.col="black")
+corrplot(cor.mat, method = "color", type="upper", diag=F, addCoef.col = "black", col=col(200),
+         tl.cex=0.7, tl.col="black", number.cex=0.7)
+```
+
++ 평균 신용점수가 높으면, 개설된 카드와 사용하는 카드 수가 적고, 할부금융업종 총 대출금액과 저축은행업종 총 대출금액이 작다. 특히 저축은행업종 총 대출금액과 평균 신용점수는 약 -0.79로 강한 음의 상관관계를 보였다. 
+
++ 반대로 평균 신용점수가 높으면, 총 대출약정금액과 총 대출금액이 많고, 은행업종 총 대출금액, 한도대출 총 약정금액, 일시상환대출 총 대출잔액과 담보대출 금액도 많다. 
+
++ 담보대출 대출금액 총합은 총 대출약정금액, 총 대출금액, 은행업종 총 대출금액과 0.9 이상의 강한 양의 상관관계를 보인다. 담보 대출의 대출 규모가 크고, 대부분이 은행에서 이루어지기 때문이다.
+
++ 저축은행업종 총 대출금액은 총 대출 약정금액, 총 대출 금액, 은행업종 총 대출 금액, 한도대출 총 약정금액,일시상환대출 총 대출잔액,담보대출 대출금액 총합과 음의 상관관계를 가지며 저축은행의 총 대출 금액이 큰 사람들이 평균 평점이 낮다. 저축은행에서는 상대적으로 적은 돈을 빌리기 때문이다.
+
++ 분할상환대출 총 대출잔액은 신용대출 대출금액 총합, 담보대출 대출금액 총합, 신용카드 일시불 및 할부금액 총합과 큰 관련성 보인다.
+
+---
+
+## 이변량 자료 시각화 {.tabset}
+
+> 변수명이 적혀있는 탭을 누르면 각 변수별 시각화 결과를 볼 수 있다.
+
+### 카드이용 : 실제 사용 카드 수와 월 카드 이용 총 금액
+
+data1_L(연령별 지역별 자료)
+
+```{r two_var1}
+p <- data1_L_mean %>% 
+      ggplot(aes(x=num_usecard, y=monthly_card_spend,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>사용 카드 수:',round(num_usecard,3),
+                          '<br>월 카드 총 이용금액:',round(monthly_card_spend))))+
+      geom_point(aes(col=ages), alpha=0.7) + theme_bw()+ scale_color_tableau() +
+      ggtitle("실제 사용 카드 수와 월 카드 이용 총 금액의 상관관계")
+ggplotly(p, tooltip = "text", width=600, height = 500)
+
+```
+
++ 두 변수는 0.89의 강한 양의 상관관계를 보인다. 
+
++ 10대와 20대는 카드 개설 수에 비해 사용하는 금액이 작다.
+
++ 제주도 30 ~ 50대는 카드 개설수는 다른 지역 같은 연령대 사람들과 비슷하지만 사용금액은 상대적으로 많다. 
+
+> End of Tab
+
+---
+
+### 일시불/ 할부 : 신용카드 일시불 이용금액 합과 신용카드 할부 이용금액 합
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var2}
+p <- data1_L_mean %>% 
+  ggplot(aes(x=credit_card_payment, y=credit_card_installments_payment,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>신용가드 일시불 이용금액 합:',round(credit_card_payment),
+                          '<br>신용카드 할부 이용금액 합:',round(credit_card_installments_payment))))+
+  geom_point(aes(col=ages), alpha=0.7) + theme_bw()+ scale_color_tableau() +
+  ggtitle("신용카드 일시불 이용금액과 신용카드 할부 이용금액의 상관관계")
+ggplotly(p, tooltip = "text", width=600, height = 500)
+```
+
++ 두 변수는 0.96의 강한 양의 상관관계를 보인다.
+
+**(2)** data1_Y(연령별 성별 자료)
+
+```{r two_var3, fig.width=6, fig.height=5}
+data1_Y_mean %>% 
+  ggplot(aes(x=credit_card_payment, y=credit_card_installments_payment))+
+  geom_point(aes(col=ages, shape = sex), size=3, alpha=0.7) + theme_bw() + scale_color_tableau() +
+  ggtitle("신용카드 일시불 이용금액 합과 신용카드 할부 이용금액 합의 상관관계")
+```
+
++ 일시불 많이 쓰는 집단이 할부금액도 크다. 
+
++ 나이가 큰 영향을 준다. 
+
++ 소비를 많이 하는 나이대인 30-50대는 일시불과 할부에서 모두 많은 지출을 기록한다.
+
+> End of Tab
+
+---
+
+### 대출금액 : 총 대출 약정금액과 총 대출금액
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var4}
+p2<- data1_L_mean %>% 
+      ggplot(aes(x=monthly_lc, y=monthly_loan,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>총 대출 약정금액:',round(monthly_lc),
+                          '<br>총 대출 금액:',round(monthly_loan))))+
+      geom_point(aes(col=ages), alpha=0.7) + theme_bw()+ scale_color_tableau() +
+      ggtitle("총 대출 약정금액과 총 대출금액의 상관관계")+
+      xlim(10000000, 170000000)+ ylim(10000000, 170000000)
+ggplotly(p2, tooltip = "text", width = 600, height=500)
+```
+
++ 두 변수는 0.98의 강한 양의 상관관계를 보인다.
+
++ 마이너스 통장 등의 영향으로 대출 약정 금액보다 대출 금액이 작고 대부분의 도시별 연령별 그룹에서 비슷한 비율을 가진다. 하지만, 대구의 70-90대는 대출 약정 금액과 대출 금액의 차이가 큰 것으로 보아 한도대출을 많이 사용한다고 볼 수 있다. 
+
++ 서울 80대와 경기 90대는 대출금액과 대출 약정 금액이 매우 크다. 
+
++ 나이가 들수록 대출금액과 대출 약정 금액이 증가하는 추세를 보이다가 70대부터 지역별로 같은 나이대에서 대출 약정 금액과 대출 금액의 차이가 두드러진다. 
+
+**(2)** data1_Y(연령별 성별 자료)
+
+```{r two_var5, fig.width=6, fig.height=5}
+data1_Y_mean %>% 
+      ggplot(aes(x=monthly_lc, y=monthly_loan))+
+      geom_point(aes(col=ages,shape=sex), size=3, alpha=0.7) + 
+      theme_bw() + scale_color_tableau() +
+      ggtitle("총 대출 약정금액과 총 대출금액의 상관관계")+
+      xlim(10000000, 120000000)+ ylim(10000000, 120000000)
+```
+
++ 남성이 여성보다 대출 약정금액과 대출 금액 모두 크다. 또한, 그중에서도 40 ~ 60대의 남성의 대출 및 대출 약정 비용이 여성보다 크며 가장 많은 3개의 성별 연령별 그룹이다. 
+
++ 90대 남성과 여성의 대출 약정금액과 대출 금액이 매우 크다.  
+
+> End of Tab
+
+---
+
+### 대출 업종 : 카드업종 총 대출금액과 보험업종 총 대출금액
+
+**(1)**  data1_L(연령별 지역별 자료)
+
+```{r two_var6}
+p3<- data1_L_mean %>% 
+      ggplot(aes(x=monthly_cd_loan, y=monthly_insurance_loan,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>카드업종 총 대출금액:',round(monthly_cd_loan),
+                          '<br>보험업종 총 대출금액:',round(monthly_insurance_loan))))+
+      geom_point(aes(col=ages), alpha=0.7) + theme_bw()+scale_color_tableau() +
+      ggtitle("카드업종 총 대출금액과 보험업종 총 대출금액의 상관관계")
+ggplotly(p3, tooltip = "text", width=600, height=500)
+```
+
++ 두 변수는 0.83의 강한 양의 상관관계를 보인다.
+
++ 대출업종 변수 monthly_bk_loan, monthly_cd_loan, monthly_installments_loan, monthly_insurance_loan, monthly_sbk_loan 중 상관계수 값이 큰 두 변수를 plot으로 표현하였다. 
+ 
++ 일부 지역의 80 ~ 90대는 카드업종보다 보험업종에서 유독 많은 대출을 기록하였다.   
+
+> End of Tab
+
+---
+
+### 거래형태코드 : 한도대출 총 약정금액과 일시상환대출 총 대출 잔액
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var7}
+p4 <- data1_L_mean %>% 
+      ggplot(aes(x=loan_commitment, y=ls_rep_loanb,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>한도대출 총 약정금액:',round(loan_commitment),
+                          '<br>일시상환대출 총 대출 잔액:',round(ls_rep_loanb))))+
+      geom_point(aes(col=ages), alpha=0.7) + theme_bw() + scale_color_tableau() + 
+      ggtitle("한도대출 총 약정금액과 일시상환대출 총 대출 잔액의 상관관계")
+ggplotly(p4, tooltip = "text", width=600, height=500)
+```
+ 
++ 거래형태코드로 분류된 변수인 한도대출 총 약정금액(loan_commitment)과 일시상환대출 총 대출 잔액 (ls_rep_loanb), 분할상환대출 총 대출 잔액(inst_rep_loanb) 중에서 상관계수 값이 가장 큰 두 변수를 plot으로 표현하였다. 
+ 
++ 10대에서 서울에 사는 사람들이 다른 10대에 비해 한도대출 총 약정금액은 비슷한 반면에 일시상환대출 총 대출 잔액이 크다. 
+ 
++ 80 ~ 90대는 한도대출 총 약정금액과 일시상환대출 총 대출 잔액 모두 지역에 따라 차이가 많이 난다. 90대 서울 그룹은 특이하게 일시상환대출 총 대출 잔액이 굉장히 크다.  
+ 
+
+> End of Tab 
+
+--- 
+ 
+### 신용/담보 : 신용대출 대출금액 총합과 담보대출 대출금액 총합
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var8}
+p5 <- data1_L_mean %>% 
+  ggplot(aes(x=credit_loan, y=mortgage_loan,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>신용대출 대출금액 총합:',round(credit_loan),
+                          '<br>담보대출 대출금액 총합:',round(mortgage_loan))))+
+  geom_point(aes(col=ages), alpha=0.7) + theme_bw()+ scale_color_tableau() +
+  ggtitle("신용대출 대출금액 총합과 담보대출 대출금액 총합의 상관관계")+
+  xlim(0, 180000000)+ ylim(0, 180000000)
+ggplotly(p5, tooltip = "text", width=600, height=500)
+```
+ 
++ 신용대출 대출금액 총합과 담보대출 대출금액 총합은 양의 상관관계(0.69)를 가진다. 
+ 
++ 30 ~ 50대가 신용대출을 많이 받는데 그중에서 40-50대는 담보대출도 많이 받는 편이다. 
+ 
++ 70 ~ 90대는 신용대출보다는 거의 담보대출을 많이 받는다. 하지만 90대 서울 그룹은 담보대출과 신용대출 모두 다른 그룹에 비해 압도적으로 많이 받는다. 
+
+> End of Tab
+
+---
+
+### 실제 사용 카드수와 할부금융업종 총 대출금액
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var9}
+p6 <- data1_L_mean %>% 
+      ggplot(aes(x=num_usecard, y=monthly_installments_loan,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>사용 카드 수:',round(num_usecard,3),
+                          '<br>할부금융업종 총 대출금액:',round(monthly_installments_loan))))+
+      geom_point(aes(col=ages), alpha=0.7) + theme_bw()+ scale_color_tableau()+
+      ggtitle("실제 사용 카드 수와 할부금융업종 총 대출금액의 상관관계")
+ggplotly(p6, tooltip = "text", width=600, height=500)
+```
+
++ 두 변수는 0.93의 높은 correlation을 가지고 있다. 
+
++ 20대와 50대, 30대와 40대가 각각 카드 개설 수와 할부금융업종 총 대출금액이 비슷하다.
+
++ 90대 서울에 거주하는 사람들은 연령대에 비해 할부금융업종 총 대출금액이 높으며, 10대부터 60대까지 서울에 거주하는 사람들은 다른 도시에 거주하는 같은 연령의 사람들에 비해 할부금융업종 총 대출금액이 낮다. 
+
+
+> End of Tab
+
+---
+
+### 저축은행업종 총 대출금액과 한도대출 총 약정금액
+
+**(1)** data1_L(연령별 지역별 자료) : 평균 점수를 기준으로
+
+```{r two_var10, fig.width=6, fig.height=5}
+data1_L_mean %>% 
+  ggplot(aes(x=monthly_sbk_loan, y=loan_commitment)) +
+  geom_point(aes(col=avg_score), size=2, alpha=0.7) + theme_bw() +
+  ggtitle("저축은행업종 총 대출금액과 한도대출 총 약정금액의 상관관계") +
+  theme(plot.title = element_text(hjust=0.5, size=15))
+```
+ 
+ + 한도대출 총 약정금액과 저축은행 총 대출 금액은 음의 상관관계(-0.63)를 가지는데 평균 등급이 높은 그룹에서는 양의 상관관계를 가진다. 
+ 
+**(2)** data1_L(연령별 지역별 자료) : 나이를 기준으로
+
+```{r two_var11, fig.width=6, fig.height=5}
+data1_L_mean %>% 
+  ggplot(aes(x=monthly_sbk_loan, y=loan_commitment)) +
+  geom_point(aes(col=ages), size=2, alpha=0.7) + theme_bw() + scale_color_tableau()+
+  ggtitle("저축은행업종 총 대출금액과 한도대출 총 약정금액의 상관관계") +
+  theme(plot.title = element_text(hjust=0.5, size=15))
+```
+
++ 나이가 큰 영향이 있다.
+
++ 나이가 적은 사람은 한도대출의 크기는 작지만 저축은행에서 빌리는 경우가 많고, 나이가 들면서 대출 규모가 커지다가 일정 수준 이상의 나이가 되면 한도대출 규모와 저축은행 대출 규모 모두 줄어든다. 
+
+**(3)** data1_Y(연령별 성별 자료) : 나이를 기준으로
+
+```{r two_var12, fig.width=6, fig.height=5}
+data1_Y_mean %>% 
+  ggplot(aes(x=monthly_sbk_loan, y=loan_commitment)) +
+  geom_point(aes(col=ages, shape = sex), size=3, alpah=0.7) + theme_bw()+ scale_color_tableau() +
+  ggtitle("저축은행업종 총 대출금액과 한도대출 총 약정금액의 상관관계") +
+    theme(plot.title = element_text(hjust=0.5, size=15))
+```
+
++ 나이가 큰 영향이 있다.
+
++ 나이가 적은 사람은 한도대출의 크기는 작지만 저축은행에서 빌리는 경우가 많고, 나이가 들면서 대출 규모가 커지다가 일정 수준 이상의 나이가 되면 한도대출 규모와 저축은행 대출 규모 모두 줄어든다. 
+
++ 남자와 여자가 생애주기별로 같은 패턴을 보이지만 여자가 한도대출이 남자보다 더 작다.
+
+
+> End of Tab
+
+---
+
+### 월 카드 총 이용금액과 할부금융업종 총 대출금액
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var13}
+p7 <- data1_L_mean %>% 
+      ggplot(aes(x=monthly_card_spend, y=monthly_installments_loan,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>월 카드 총 이용금액:',round(monthly_card_spend),
+                          '<br>할부금융업종 총 대출금액:',round(monthly_installments_loan))))+
+      geom_point(aes(col=ages), alpha=0.7) + theme_bw()+  scale_color_tableau() +
+      ggtitle("월 카드 총 이용금액과 할부금융업종 총 대출금액의 상관관계")
+ggplotly(p7, tooltip = "text", width=600, height=500)
+```
+ 
++ 월 카드 총 이용금액과 할부금융업종 총 대출금액은 양의 상관관계(0.89)를 가진다. 
+
++ 서울, 부산, 제주를 제외한 10대와 서울을 제외한 20대, 그리고 90대 서울 그룹은 같은 월 카드 총 이용금액을 가지는 그룹에 비해 할부금융업종 총 대출금액이 많다. 
+
++ 30 ~ 70대 서울, 60대 제주 그룹은 같은 월 카드 총 이용금액을 가지는 그룹에 비해 할부금융업종 총 대출금액이 적다. 
+ 
+**(2)** data1_Y(연령별 성별 자료)
+
+```{r two_var14, fig.width=6, fig.height=5}
+data1_Y_mean %>% 
+  ggplot(aes(x=monthly_card_spend, y=monthly_installments_loan)) +
+  geom_point(aes(col=ages,shape=sex), size=3, alpha=0.7) + theme_bw()+ scale_color_tableau() +
+  ggtitle("월 카드 총 이용금액과 할부금융업종 총 대출금액의 상관관계") +
+  theme(plot.title = element_text(hjust=0.5, size=15))
+```
+
++ 10대와 20대 남자 그룹은 같은 월 카드 총 이용금액을 가지는 그룹에 비해 할부금융업종 총 대출금액이 많다. 
+
++ 이를 통해 월 카드 총 이용금액과 할부금융업종 총 대출금액이 모두 많은 30-50대 그룹과 서울, 부산, 제주를 제외한 10대와 서울을 제외한 20대 그중에서도 특히 남성, 그리고 90대 서울 그룹에게 할부금융 상품을 추천해주는 것이 필요하다. 
+ 
+ 
+> End of Tab
+ 
+---
+ 
+### 월 카드 총 이용금액과 보험업종 총 대출금액
+
+**(1)** data1_L(연령별 지역별 자료)
+
+```{r two_var15}
+p8 <- data1_L_mean %>% 
+  ggplot(aes(x=monthly_card_spend, y=monthly_insurance_loan,
+             text = paste('연령:',ages,
+                          '<br>도시:',city, 
+                          '<br>월 카드 총 이용금액:',round(monthly_card_spend),
+                          '<br>보험업종 총 대출금액:',round(monthly_insurance_loan))))+
+  geom_point(aes(col=ages), alpha=0.7) + theme_bw()+ scale_color_tableau() +
+  ggtitle("월 카드 총 이용금액과 보험업종 총 대출금액의 상관관계")
+ggplotly(p8, tooltip = "text", width = 600, height=500)
+```
+ 
++ 월 카드 총 이용금액과 보험금융업종 총 대출금액은 양의 상관관계(0.77)를 가진다. 
+
++ 30-50대는 월 카드 총 이용금액과 보험금융업종 총 대출금액이 모두 많고, 80-90대는 같은 월 카드 총 이용금액을 가지는 그룹에 비해 보험금융업종 총 대출금액이 많다. 특히 80대 제주, 90대 대전 그룹은 같은 월 카드 총 이용금액을 가지는 그룹에 비해 보험금융업종 총 대출금액이 많다. 
+
++ 20대는같은 월 카드 총 이용금액을 가지는 그룹에 비해 보험금융업종 총 대출금액이 적다. 특히, 20-70대 제주 그룹은 같은 월 카드 총 이용금액을 가지는 그룹에 비해 보험금융업종 총 대출금액이 적다. 
+
++ 이를 통해 월 카드 총 이용금액과 보험금융업종 총 대출금액이 모두 많은 30-50대 그룹과 80-90대에게 보험금융 상품을 추천해주는 것이 필요하다.
+ 
+
+> End of Tab
+
+
+---
+
+## 주성분분석
+
+```{r pca1, fig.width=5, fig.height=5}
+data1_L_mean_by_pop_cd <- data1_L %>% 
+  dplyr::select(pop_cd, num_var, -avg_rat, -population) %>% group_by(pop_cd) %>% summarise_all(mean)
+
+X.scaled <- data1_L_mean_by_pop_cd %>% dplyr::select(-pop_cd) %>% scale
+pca <- prcomp(X.scaled, retx=T) 
+# retx: a logical value indicating whether the rotated variables should be returned.
+summary_pca <- summary(pca)
+knitr::kable(summary_pca$importance, digits = 3)
+```
+
++ PC2 까지가 입력변수 공간 전체 분산의 약 88% 설명한다.
+
+```{r pca2, fig.width=6, fig.height=4}
+pca_df <- data.frame(num_pc=1:ncol(X.scaled), Eigenvalue=(pca$sdev)^2)
+pca_df %>% ggplot(aes(x=num_pc, y=Eigenvalue)) + geom_point() + geom_line() +
+  geom_hline(yintercept=1, linetype='dashed', color='red', size=1) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size=15) ) +
+  labs(title="Scree plot", 
+       x="Number of PC", y="Eigenvalue")
+```
+
++ 고유값도 PC1과 PC2만 1이상이고 다른 PC들에 비해 매우 크다. 따라서, PC1과 PC2만 사용해도 데이터를 충분히 설명할 수 있다.
+
+
+```{r pca3, fig.width=6, fig.height=6}
+# biplot
+autoplot(pca, label = F, 
+         loadings.label=T, loadings.label.colour="red", loadings.colour="black",
+         loadings.label.repel=T,
+         alpha=0.5, shape=15, size=2,	colour="#24239D") + 
+  theme(panel.background=element_rect(fill="#E3E3EE"), aspect.ratio=1) +
+  theme_bw()
+```
+
+원데이터의 변수들간의 관계를 알아보기 위해 PC1과 PC2를 x, y축으로 설정하여 행렬도(biplot)를 그려보았다. 행렬도에 나타난 변수 관계의 특성상 가까운 거리와 방향일수록 변수들의 양의 상관성이 높아지게 된다.
+
++ avg_score와 monthly_sbk_loan이 완전 반대 방향이다. 저축은행 대출금액과 신용점수는 매우 강한 음의 상관관계를 보인다.
+
++ avg_score가 킇수록 PC2 값이 작아지는데 해석을 더 쉽게 하기 위해 이어지는 그래프에서는 PC2의 방향을 바꾸어 표시하였다. 
+
+```{r pca4, fig.width=5, fig.height=5}
+PC1 <- pca$rotation[,1]
+PC2 <- -pca$rotation[,2] # avg_score를 양수로 만들기 위해 부호를 바꿈
+
+data_heatmap <- data.frame(variable=rep(colnames(X.scaled),2),
+                           PC=rep(c("PC1", "PC2"), each=ncol(X.scaled)),
+                           coef=c(PC1, PC2))
+ggplot(data_heatmap, aes(PC, variable)) +
+  geom_tile(aes(fill = coef)) +
+  scale_fill_gradientn(limits = c(-0.4, 0.4), colors = rev(brewer.pal(5, "RdBu"))) +
+  scale_y_discrete(limits = rev(unique(data_heatmap$variable))) +
+  geom_text(aes(label = round(coef, 2))) +
+  ggtitle("Heatmap of Principal Components") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(angle = 90),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
++ PC1은 monthly_sbk_loan의 계수를 제외한 다른 변수의 계수들은 방향이 같고 크기가 비슷한 패턴을 보인다. 따라서, PC1은 데이터를 전반적으로 설명해주는 축이라고 할 수 있다. PC1 점수 값이 크면 monthly_sbk_loan의 값은 작고, 다른 변수들의 값은 전반적으로 큰 것으로 볼 수 있다. avg_score를 제외한 나머지 변수들은 대출금액과 카드이용금액 관련 변수들이므로 PC1 점수 값이 크면 대출금액과 카드이용금액이 많은 것으로 볼 수 있다.
+
++ PC2는 avg_score와 방향이 같은 변수들과 방향이 다른 변수들로 구분된다. 따라서, PC2는 고객그룹을 avg_score에 따라 구분해주는 축으로 볼 수 있다. monthly_loan, monthly_cd_loan, loan_commitment, ls_rep_loanb, mortgage_loan 변수는 avg_score와 같은 방향이고, num_usecard, monthly_card_spend, monthly_cd_loan, monthly_installment_loan, monthly_insurance_loan, monthly_sbk_loan, inst_rep_loanb, credit_loan은 avg_score와 반대 방향이다. PC2 점수가 크면 신용도가 좋은 것으로 볼 수 있다.
+
+
+```{r pca5, fig.width=5, fig.height=5}
+temp <- data1_L %>% dplyr::select(pop_cd, city, ages) %>% distinct
+temp1 <- left_join(data1_L_mean_by_pop_cd, temp)
+PC1 <- pca$rotation[,1]
+PC2 <- -pca$rotation[,2] # avg_score의 계수를 양수로 만들기 위해 부호를 바꿈
+PC <- data.frame(variabe=names(PC1), PC1, PC2)
+rownames(PC) <- NULL
+PC1_score <- pca$x[,1]
+PC2_score <- -pca$x[,2] # avg_score를 양수로 만들기 위해 부호를 바꿈
+df <- cbind(PC1=PC1_score, PC2=PC2_score, temp1[,c("city", "ages")])
+
+p1 <- df %>% ggplot(aes(x=PC1, y=PC2, color=city)) + 
+  geom_point(size=1.5, shape=15, alpha=0.7) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size=20)) +
+  ggtitle("지역별 고객구분 코드 시각화") + ylim(c(-8,8)) + xlim(c(-8,8)) +
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=0.5) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=0.5)
+
+p2 <- df %>% ggplot(aes(x=PC1, y=PC2, color=ages)) + 
+  geom_point(size=1.5, shape=15, alpha=0.7) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size=20)) +
+  scale_color_tableau() +
+  ggtitle("연령대별 고객구분 코드 시각화") + ylim(c(-8,8)) + xlim(c(-8,8))+
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=0.5) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=0.5)
+
+# grid.arrange(p1, p2, ncol=2)
+ggplotly(p1, width = 600, height = 500)
+ggplotly(p2, width = 600, height = 500)
+```
+
++ 지역별, 연령대별로 고객구분 코드를 시각화해본 결과 고객구분 코드가 지역보다는 연령대 별로 묶이는 모습을 보인다.
+
++ 사분면의 의미를 다음과 같이 해석해 볼 수 있다.
+
+  + 1사분면은 대출금액과 카드이용 금액이 크고, 신용점수가 높은 그룹
+  + 2사분면은 대출금액과 카드이용 금액이 작고, 신용점수가 높은 그룹
+  + 3사분면은 대출금액과 카드이용 금액이 작고, 신용점수가 낮은 그룸
+  + 4사분면은 대출금액과 카드이용 금액이 크고, 신용점수가 낮은 그룹
+
++ 이를 바탕으로 다음과 같은 해석을 해볼 수 있다.
+
+  + 60대 이상의 노년층의 신용점수가 전반적으로 높다.
+  + 서울, 경기 등 대도시 지역에 사는 노년층이 농촌지역에 사는 노년층보다 대출금액과 카드이용 금액이 크다.
+  + 10대와 20대는 신용점수가 낮고, 대출금액과 카드이용금액이 작다.
+  + 30대~50대는 대출금액과 카드이용금액은 크지만 신용점수는 낮다.
+
+---
+
+## 클러스터링
+
+고객그룹을 유사한 특성을 가진 몇 개의 그룹으로 나누기 위해 k-means 클러스터링을 이용하여 군집분석을 수행하였다. 클러스터링을 하기 전에 상관계수가 높은 변수들 중 서로 의미가 유사한 변수들과 avg_rat, population 변수를 제거하였다.
+
+```{r cluster1}
+del_var <- c("avg_rat", "population", "num_opencard", "monthly_lc", "credit_card_payment", "credit_card_installments_payment")
+sel_var <- setdiff(num_var, del_var)
+
+data1_L_mean_by_pop_cd <- data1_L %>% 
+  dplyr::select(pop_cd, sel_var) %>% group_by(pop_cd) %>% summarise_all(mean)
+
+X.scaled <- data1_L_mean_by_pop_cd %>% dplyr::select(-pop_cd) %>% scale
+```
+
+### 클러스터 수 정하기
+
+클러스터의 수 k를 결정하기 위해 wss plot과 실루엣 plot을 그려 보았다.
+
+```{r cluster2, fig.width=6, fig.height=4}
+set.seed(26)
+k.max <- 10
+wss <- sapply(1:k.max, function(k){kmeans(X.scaled, k, nstart=25, iter.max=100)$tot.withinss})
+
+cluster_df <- data.frame(num_cluster=1:k.max, wss=wss)
+cluster_df %>% ggplot(aes(x=num_cluster, y=wss)) + geom_point() + geom_line() +
+  geom_hline(yintercept=wss[6], linetype='dashed', color='red', size=1) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size=15) ) +
+  labs(title= "Total within-clusters sum of squares", 
+       x= "Number of clusters k", y="Total within-clusters sum of squaures")
+```
+
+```{r cluster3, fig.height=8}
+for (i in 4:9){
+  set.seed(26)
+  kmeans_res <- kmeans(X.scaled, centers=i, nstart = 25, iter.max = 100)
+  sil <- silhouette(kmeans_res$cluster, dist(X.scaled))
+  assign(paste0("p",i), fviz_silhouette(sil, print.summary=F) + scale_color_tableau() + scale_fill_tableau())
+}
+grid.arrange(p4, p5, p6, p7, p8, p9, ncol=2)
+```
+
+wss plot을 보면 k=10 정도가 elbow point로 보인다. 하지만 실루엣 plot에서 k=6일 때 average silhouette width값이 크고, 모든 silhouette width 값이 0 이상이며 평균 silhouette width 값 근처에 있는 것을 확인할 수 있다. 따라서 클러스터의 수 k를 6으로 정하였다. wss plot의 빨간 점선은 k=6일 때의 wss 값을 표시한 것이다. silhouette width 값은 -1에서 1 사이의 값을 가지며 1에 가까울 수록 해당 관측 개체가 적절한 클러스터에 할당되었다는 것을 의미하고 -1에 가까울수록 부적절한 클러스터에 할당되었다는 것을 의미한다.
+
+```{r cluster4, fig.width=5, fig.height=4}
+pca <- prcomp(X.scaled, retx=T) 
+PC1_score <- pca$x[,1]
+PC2_score <- -pca$x[,2]
+set.seed(26)
+km <- kmeans(X.scaled, centers=6, nstart = 25, iter.max = 100)
+cluster_df <- data.frame(PC1=PC1_score, PC2=PC2_score,
+                         cluster=factor(km$cluster))
+
+p <- ggplot(data=cluster_df, aes(x=PC1, y=PC2)) + 
+  geom_point(aes(color=cluster, shape=cluster), size=2.5, alpha=0.7) + 
+  theme_bw() + 
+  theme(plot.title = element_text(hjust=0.5, size=20)) +
+  ylim(c(-8,8)) + xlim(c(-8,8)) +
+  scale_shape_manual(values=c(15, 16, 4, 18, 8, 17)) +
+  scale_color_tableau() +
+  ggtitle("클러스터링 결과 시각화") +
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=0.5) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=0.5)
+ggplotly(p, width=600, height=500)
+```
+
+클러스터링 결과를 PC1과 PC2를 이용하여 시각화 해본 결과 클러스터가 비교적 잘 나누어 진 것을 확인하였다.
+
+---
+
+### 클러스터 별 특성 {.tabset}
+
+또한, 센터값을 통해 각 클러스터의 의미를 명확히 이해하고자 하였으며 아래와 같은 결과를 얻을 수 있었다. 
+
+
+```{r cluster_centers2, fig.width=6, fig.height=6}
+cluster_centers <- data.frame(t(km$centers))
+colnames(cluster_centers) <- paste("Cluster", 1:6)
+data_heatmap <- data.frame(variable=rep(rownames(cluster_centers), ncol(cluster_centers)),
+                           cluster=rep(colnames(cluster_centers), each=nrow(cluster_centers)),
+                           coef=c(cluster_centers$`Cluster 1`, cluster_centers$`Cluster 2`,
+                                  cluster_centers$`Cluster 3`, cluster_centers$`Cluster 4`,
+                                  cluster_centers$`Cluster 5`, cluster_centers$`Cluster 6`))
+ggplot(data_heatmap, aes(cluster, variable)) +
+  geom_tile(aes(fill = coef)) +
+  scale_fill_gradientn(limits = c(-4,4), colors = rev(brewer.pal(5, "RdBu"))) +
+  scale_y_discrete(limits = rev(unique(data_heatmap$variable))) +
+  geom_text(aes(label = round(coef, 2))) +
+  ggtitle("Heatmap of Cluster centers") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(angle = 90),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
+|클러스터|신용 |카드이용 | 대출 | 1금융 vs 2금융| 저축은행 | 분할상환 vs 일시상환 | 신용 vs 담보 |
+:-------:|:---:|:-------:|:----:|:-------------:|:--------:|:--------------------:|:------------:|
+|1       |good | low     | high |1금융          |low       |일시                  |both          |
+|2       |good | low     | high |1금융          |low       |일시                  |담보          |
+|3       |bad  | low     | low  |2금융(저축은행)|high      |분할(평균이하)        |신용(평균이하)|
+|4       |bad  | high    | low  |2금융          |high      |분할(평균이하)        |신용(평균이하)|
+|5       |good | low     | soso |1금융(평균이하)|low       |일시                  |담보(평균이하)|
+|6       |soso | high    | high |2금융          |middle    |분할                  |신용(평균이하)|
+
+
+> 변수명이 적혀있는 탭을 누르면 각 변수별 시각화 결과를 볼 수 있다.
+
+```{r cluster5}
+cluster.number <- km$cluster
+cluster.number <- as.data.frame(cluster.number)
+cluster.number$pop_cd <- data1_L_mean_by_pop_cd$pop_cd
+
+temp <- data1_L %>% dplyr::left_join(cluster.number %>% dplyr::select(pop_cd, cluster.number),by=c("pop_cd"))
+
+cluster1 <- temp %>% dplyr::filter(cluster.number==1) 
+cluster2 <- temp %>% dplyr::filter(cluster.number==2)   
+cluster3 <- temp %>% dplyr::filter(cluster.number==3) 
+cluster4 <- temp %>% dplyr::filter(cluster.number==4) 
+cluster5 <- temp %>% dplyr::filter(cluster.number==5) 
+cluster6 <- temp %>% dplyr::filter(cluster.number==6)  
+```
+
+#### 클러스터 1
+
+```{r cluster6, fig.width=4, fig.height=4}
+cluster1 %>% ggplot(aes(x=city, y=frequency(pop_cd), fill=ages)) +
+  geom_bar(alpha=0.9, stat="identity", width = 0.5) + 
+  scale_fill_tableau() +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=15)) +
+  ggtitle("클러스터 1: 수도권의 노년")
+```
+
++ 클러스터 1은 서울의 80대와 90대, 경기의 90대가 포함된 그룹이다. 그래서 이들을 "수도권의 노년"이라고 명명하였다. 대출금액이 많고 신용도는 좋은데 카드는 잘 이용하지 않는다. 주로 1금융을 이용하며, 저축은행은 잘 이용하지 않고, 분할상환보다는 일시상환을 선호한다. 신용대출과 담보대출 모두 많은 편이다.
+
+> End of Tab
+
+---
+
+#### 클러스터 2 
+
+```{r cluster7, fig.width=6, fig.height=4}
+cluster2 %>% ggplot(aes(x=city, y=frequency(pop_cd), fill=ages)) +
+  geom_bar(alpha=0.9, stat="identity") +
+  scale_fill_tableau() +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=15)) +
+  ggtitle("클러스터 2: 제 2의 전성기")
+```
+
++ 클러스터 2에는 50대에서 70대가 속했고, 60대의 비중이 높다. 또한, 서울, 경기, 울산 등 대도시가 주로 포함되어 있다. 신용도가 좋고, 주로 1금융을 이용하며, 분할상환보다는 일시상환, 신용대출보다는 담보대출을 선호한다. 은퇴 후 새로운 삶을 시작하거나 누리고 있는 그룹이라고 생각하여 클러스터 2를 "제 2의 전성기"로 명명하였다.
+
+> End of Tab
+
+---
+
+#### 클러스터 3
+
+```{r cluster8, fig.width=6, fig.height=4}
+cluster3 %>% ggplot(aes(x=city, y=frequency(pop_cd), fill=ages)) +
+  geom_bar(alpha=0.9, stat="identity") +
+  scale_fill_tableau() +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=15)) +
+  ggtitle("클러스터 3: 서투른 10대")
+```
+
++ 클러스터 3에는 모든 지역의 10대가 함께 묶였다. 이들은 신용도가 좋지 않고, 저축은행 대출은 많은데 다른 2금융권 대출은 적다. 일시상환보다는 분할상환, 담보대출보다는 신용대출이 많다. 그래서 이들을 "서투른 10대"라고 명명하였다.
+
+
+> End of Tab
+
+---
+
+#### 클러스터 4
+
+```{r cluster9, fig.width=6, fig.height=4}
+cluster4 %>% ggplot(aes(x=city, y=frequency(pop_cd), fill=ages)) +
+  geom_bar(alpha=0.9, stat="identity") + 
+  scale_fill_tableau() +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=15)) +
+  ggtitle("클러스터 4: 전전긍긍 20대")
+```
+
++ 클러스터 4에는 모든 지역의 20대가 함께 묶였다. 이들은 10대와 마찬가지로 신용도도 좋지 않고, 제 2금융권 중 저축은행과 할부금융 업종 대출이 많은 편이다. 10대와는 달리 이용하는 카드 수는 많았고, 카드 이용금액도 6개의 그룹 중 세번째로 많았다. 그래서 이들을 "전전긍긍 20대"라고 명명하였다.
+
+> End of Tab
+
+---
+
+#### 클러스터 5
+
+```{r cluster10, fig.width=6, fig.height=4}
+cluster5 %>% ggplot(aes(x=city, y=frequency(pop_cd), fill=ages)) +
+  geom_bar(alpha=0.9, stat="identity") + 
+  scale_fill_tableau() +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=15)) +
+  ggtitle("클러스터 5: 비수도권의 노년")
+```
+
+클러스터 5에 속한 그룹은 인천을 제외하면 모두 비수도권이고, 주로 70대 ~ 90대가 포함되었다. 그래서 이들을 "비수도권의 노년"이라고 명명하였다. 이 그룹은 신용도는 좋은데 대출금액과 카드이용 모두 적은 편이고, 주로 1금융을 이용한다. 저축은행 이용금액이 모든 클러스터 중 가장 작고, 분할상환보다는 일시상환, 신용대출보다는 담보대출을 선호한다.
+
+> End of Tab
+
+---
+
+#### 클러스터 6
+
+```{r cluster11, fig.width=6, fig.height=4}
+cluster6 %>% ggplot(aes(x=city, y=frequency(pop_cd), fill=ages)) +
+  geom_bar(alpha=0.9, stat="identity") + 
+  scale_fill_tableau() +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=15)) +
+  ggtitle("클러스터 6: 일이 많은 중장년")
+```
+
+클러스터 6에는 경북과 제주의 50대를 제외한 모든 지역의 30대 ~ 50대가 포함되었다. 신용도는 보통이고, 대출금액과 카드이용금액이 모든 클러스터 중 가장 많다. 제 2금융 중 카드, 할부금융, 보험업종 대출금액이 많은데 저축은행 대출금액은 상대적으로 적은 편이다. 일시상환보다는 분할상환, 담보대출보다는 신용대출이 많다. 그래서 이들을 "일이 많은 중장년"으로 명명하였다. 
+
+> End of Tab
+
+---
+
+# jeju_financial_life_data
+
+## 데이터 불러오기
+
+jeju_address 폴더에 주소 파일들이 들어가 있다. rmarkdown 파일이 있는 디렉토리에 jeju_address 폴더가 있어야 한다.
+
+```{r Load data2, message=F}
+# 데이터 불러 오기 ####
+data2 <- read_csv("jeju_financial_life_data.csv")
+ttemp <- data2
+
+SGP_dong <- read_csv("jeju_address/SGP_dong.csv",col_names=F) # 서귀포 동 지역
+SGP_N1 <- read_csv("jeju_address/SGP_N1.csv", col_names=F) # 서귀포 남원읍 
+SGP_DJ <- read_csv("jeju_address/SGP_DJ.csv", col_names=F) # 서귀포 대정읍 
+SGP_SS <- read_csv("jeju_address/SGP_SS.csv", col_names=F) # 서귀표 성산읍 
+SGP_AD <- read_csv("jeju_address/SGP_AD.csv", col_names=F) # 서귀표 안덕면 
+SGP_PS <- read_csv("jeju_address/SGP_PS.csv", col_names=F) # 서귀포 표선면 
+jeju_dong <- read_csv("jeju_address/jeju_dong.csv", col_names=F) # 제주 동지역
+jeju_GJ <- read_csv("jeju_address/jeju_GJ.csv", col_names=F) #구좌읍
+jeju_AW <- read_csv("jeju_address/jeju_AW.csv", col_names=F) # 애월읍
+jeju_WD <- read_csv("jeju_address/jeju_WD.csv", col_names=F) # 우도면
+jeju_JC <- read_csv("jeju_address/jeju_JC.csv", col_names=F) # 조천읍
+jeju_CJ <- read_csv("jeju_address/jeju_CJ.csv", col_names=F) # 추자면
+jeju_HG <- read_csv("jeju_address/jeju_HG.csv", col_names=F) # 한경면
+jeju_HL <- read_csv("jeju_address/jeju_HL.csv", col_names=F) # 한림읍
+
+postN2 <- read.table("jeju_address/제주특별자치도.txt", 
+                     header=T, sep="|",quote="", fileEncoding = "euc-kr") # 서귀포 전지역
+```
+
+읍면의 우편번호는 
+
+[읍면 우편번호](https://librewiki.net/wiki/%EC%9A%B0%ED%8E%B8%EB%B2%88%ED%98%B8/%EC%A0%9C%EC%A3%BC%ED%8A%B9%EB%B3%84%EC%9E%90%EC%B9%98%EB%8F%84)
+
+`제주특별자치도.txt` 파일은 
+
+[https://www.epost.go.kr/search.RetrieveIntegrationNewZipCdList.comm](https://www.epost.go.kr/search.RetrieveIntegrationNewZipCdList.comm)
+
+을 참고하여 데이터를 만들었다. 
+
+
+```{r Merge }
+# Merge #####
+ttemp <- data2
+ttemp[,28] <- "a"
+ttemp[,29] <- 1
+names(postN2)[1] <- ("zip_cd")
+names(postN2)[18] <- ("region")
+postN2$region <- as.character(postN2$region)
+a <- unique(postN2$zip_cd)
+for(i in 1: length(a)){
+  e <- unique(postN2[postN2$zip_cd==a[i],18])
+  if(length(e)==1) ttemp[ttemp$zip_cd %in% a[i], 28] <- e
+  d <- nrow(ttemp[(ttemp$zip_cd %in% a[i]),])
+  for (j in 2:6){
+    if(length(e)==j){
+      ss <- sample(1:j, d ,replace=T,prob=rep(1/j,j))
+      ttemp[(ttemp$zip_cd %in% a[i]),29] <- ss
+      for(k in 1:j)
+        ttemp[(ttemp$zip_cd %in% a[i]) & (ttemp$V29==k),28] <- e[k]
+    }
+  }
+}
+# lengths(unique(ttemp[is.na(ttemp$V28)|ttemp$V28=="",1])) # 161개
+
+
+# 순서 2 - 읍면 넣기 ####
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") & (ttemp$zip_cd %in% SGP_N1$X1), 28] <- "남원읍"
+ttemp[,29]<-1
+ttemp[ttemp$zip_cd %in% SGP_dong$X1, 30] <- "서귀포시"
+ttemp[ttemp$zip_cd %in% SGP_N1$X1, 30] <- "서귀포시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% SGP_DJ$X1), 28] <- "대정읍" 
+ttemp[(ttemp$zip_cd %in% SGP_DJ$X1), 30] <- "서귀포시" 
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% SGP_SS$X1), 28] <- "성산읍" 
+ttemp[ttemp$zip_cd %in% SGP_SS$X1, 30] <- "서귀포시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% SGP_AD$X1), 28] <- "안덕면" 
+ttemp[ttemp$zip_cd %in% SGP_AD$X1, 30] <- "서귀포시" 
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% SGP_PS$X1), 28] <- "표선면" 
+ttemp[ttemp$zip_cd %in% SGP_PS$X1, 30] <- "서귀포시" 
+ttemp[ttemp$zip_cd %in% jeju_dong$X1, 30] <- "제주시" 
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_GJ$X1), 28] <- "구좌읍" 
+ttemp[ttemp$zip_cd %in% jeju_GJ$X1, 30] <- "제주시" 
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_AW$X1), 28] <- "애월읍" 
+ttemp[ttemp$zip_cd %in% jeju_AW$X1, 30] <- "제주시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_WD$X1), 28] <- "우도면" 
+ttemp[ttemp$zip_cd %in% jeju_WD$X1, 30] <- "제주시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_JC$X1), 28] <- "조천읍" 
+ttemp[ttemp$zip_cd %in% jeju_JC$X1, 30] <- "제주시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_CJ$X1), 28] <- "추자면" 
+ttemp[ttemp$zip_cd %in% jeju_CJ$X1, 30] <- "제주시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_HG$X1), 28] <- "한경면" 
+ttemp[ttemp$zip_cd %in% jeju_HG$X1, 30] <- "제주시"
+ttemp[(is.na(ttemp$V28)|ttemp$V28=="") &(ttemp$zip_cd %in% jeju_HL$X1), 28] <- "한림읍" 
+ttemp[ttemp$zip_cd %in% jeju_HL$X1, 30] <- "제주시"
+# lengths(unique(ttemp[is.na(ttemp$V28)|ttemp$V28=="",1])) # 0개
+
+# 지역명 통일 ########################
+ttemp$V28 <- gsub("3","삼",ttemp$V28)
+ttemp$V28 <- gsub("2","이",ttemp$V28)
+ttemp$V28 <- gsub("1","일",ttemp$V28)
+ttemp$V28 <- gsub(" 오라삼동","오라삼동",ttemp$V28)
+ttemp$V28 <- gsub("연동 ","연동",ttemp$V28)
+ttemp$V28 <- gsub("영평동  ","영평동",ttemp$V28)
+ttemp$V28 <- gsub("월평동 ","월평동",ttemp$V28)
+
+
+# EMD_code merge #############
+EMD_code_jeju <- read.csv("jeju_address/EMD_code_jeju.csv", fileEncoding = "euc-kr")
+EMD_code_jeju$code <- as.numeric(EMD_code_jeju$code)
+EMD_code_jeju$region <- as.character(EMD_code_jeju$region)
+
+r <- EMD_code_jeju[EMD_code_jeju$city=="제주",]
+q <- EMD_code_jeju[EMD_code_jeju$city=="서귀포",]
+for( i in 1: nrow(r)){
+  ttemp[(ttemp$V30=="제주시") & (ttemp$V28==r[i,2]),29] <- r[i,1] #(EMD_code_jeju$region==a[i,1]) ,1]
+}
+# ttemp[ttemp$V28=="일도일동",c(1,28,29,30)]
+for( i in 1: nrow(q)){
+  ttemp[(ttemp$V30=="서귀포시") & (ttemp$V28==q[i,2]) ,29] <- q[i,1] #(EMD_code_jeju$region==a[i,1]) ,1]
+}
+# ttemp[ttemp$V28=="보목동",c(1,28,29,30)]
+
+ttemp[ttemp$V28=="남원읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="남원읍",1]
+ttemp[ttemp$V28=="대정읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="대정읍",1]
+ttemp[ttemp$V28=="성산읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="성산읍",1]
+ttemp[ttemp$V28=="안덕면", 29] <- EMD_code_jeju[EMD_code_jeju$region=="안덕면",1]
+ttemp[ttemp$V28=="표선면", 29] <- EMD_code_jeju[EMD_code_jeju$region=="표선면",1]
+ttemp[ttemp$V28=="구좌읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="구좌읍",1]
+ttemp[ttemp$V28=="애월읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="애월읍",1]
+ttemp[ttemp$V28=="우도면", 29] <- EMD_code_jeju[EMD_code_jeju$region=="우도면",1]
+ttemp[ttemp$V28=="조천읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="조천읍",1]
+ttemp[ttemp$V28=="추자면", 29] <- EMD_code_jeju[EMD_code_jeju$region=="추자면",1]
+ttemp[ttemp$V28=="한경면", 29] <- EMD_code_jeju[EMD_code_jeju$region=="한경면",1]
+ttemp[ttemp$V28=="한림읍", 29] <- EMD_code_jeju[EMD_code_jeju$region=="한림읍",1]
+
+names(ttemp)[c(3,4,28,29,30)] <- c("long","lat","EMD_KOR_NM","id","city")
+
+
+# EMD_code랑 한글 + map ID랑 매치 시켰음. ### 
+jeju_EMD <-  shapefile("jeju_address/TL_SCCO_EMD.shp")
+jeju_map <- fortify(jeju_EMD, region='EMD_CD')
+jeju_map$id <- as.numeric(jeju_map$id)
+jeju_map_real <- jeju_map %>% filter(str_detect(id, "^50"))
+merge_result <- left_join(jeju_map_real, EMD_code_jeju[,c(1,2,4)], by=c("id"="code"))
+```
+
+data2에 있는 우편번호를 기준으로 법정동명과 법정동코드를 알아내어 새로운 데이터셋을 만들어 준 뒤, 이것을 Shapefile과 법정동 코드를 기준으로 합쳐주었다. 
+
++ 앞서 있던 시각화와 마찬가지로 읍면리 기준의 shapefile을 다운받아야 한다.
+
++ shapefile은 [http://www.gisdeveloper.co.kr/?p=2332](http://www.gisdeveloper.co.kr/?p=2332)에서 다운로드 할 수 있다.
+
++ rmarkdown이 있는 디렉토리에서 CTPRVN_201703 폴더에 TL_SCCO_CTPRVN.shp 파일 뿐만 아니라 prj, shx,dbf가 모두 있어야  위의 코드가 실행된다.
+
+
+```{r Jido}
+ttemp2 <- ttemp[,c(7:27,28,29)]
+ttemp2 <-ttemp2 %>%
+  group_by(id,EMD_KOR_NM)%>%
+  summarise(job_majorc=mean(job_majorc,na.rm=T),
+            job_smallc=mean(job_smallc, na.rm=T),
+            job_public=mean(job_public,na.rm=T),
+            job_profession=mean(job_profession,na.rm=T),
+            job_self=mean(job_self,na.rm=T),
+            job_none=mean(job_none,na.rm=T),
+            job_other=mean(job_other,na.rm=T),
+            avg_income= mean(avg_income, na.rm = T), 
+            med_income= mean(med_income, na.rm = T), 
+            avg_spend= mean(avg_spend, na.rm = T), 
+            avg_foreign_spend= mean(avg_foreign_spend , na.rm = T), 
+            avg_debt= mean(avg_debt , na.rm = T),
+            avg_debt_credit= mean(avg_debt_credit , na.rm = T),
+            avg_debt_noneb= mean(avg_debt_noneb , na.rm = T),
+            avg_debt_mortgage= mean(avg_debt_mortgage , na.rm = T),
+            avg_debt_deposit= mean(avg_debt_deposit , na.rm = T),
+            avg_debt_collateral= mean(avg_debt_collateral , na.rm = T),
+            avg_credit_rat= mean(avg_credit_rat , na.rm = T),
+            medium_resid_rat= mean(medium_resid_rat , na.rm = T),
+            large_resid_rat= mean(large_resid_rat , na.rm = T),
+            vehicle_own_rat= mean(vehicle_own_rat , na.rm = T))
+merge_result2 <- inner_join(merge_result, ttemp2, by="id")
+```
+
+
+
+## 변수별 시각화 {.tabset}
+
+> 변수명이 적혀있는 탭을 누르면 각 변수별 시각화 결과를 볼 수 있다.
+
+### 신용도 판단정보
+
+```{r jeju_avg_credit_rat}
+p1 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_credit_rat,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="신용도 판단정보") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p1, tooltip = "text", width=700, height=500)
+```
+
+> End of Tab
+
+---
+
+### 소득
+
+```{r jeju_avg_income}
+p1 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_income,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 연소득") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p1, tooltip = "text", width=700, height=500)
+
+
+p2 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=med_income,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 중위 연소득") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p2, tooltip = "text", width=700, height=500)
+```
+
+중위 연소득의 경우 평균 연소득과 마찬가지로 서귀포시의 상효동이 가장 높음을 볼 수 있다.
+
+> End of Tab
+
+---
+
+
+### 소비 
+
+```{r jeju_avg_spend}
+p1 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_spend, 
+                                   text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 소비액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p1, tooltip = "text", width=700, height=500)
+
+
+p2 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_foreign_spend, 
+                                   text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 해외소비액") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p2, tooltip = "text", width=700, height=500)
+```
+
+지역별 평균 소비액은 읍이나 면보다는 제주시가 높았으며, 서귀포시의 상효동이 압도적으로 높음을 확인할 수 있었다. 
+
+> End of Tab
+
+---
+
+### 대출
+
+```{r jeju_avg_debt}
+p1 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_debt,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 채무보유액 ") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p1, tooltip = "text", width=700, height=500)
+
+
+p2 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_debt_credit,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 채무보유액 - 신용대출 ") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p2, tooltip = "text", width=700, height=500)
+
+
+p3 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_debt_noneb,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 채무보유액 - 비은행대출") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p3, tooltip = "text", width=700, height=500)
+
+
+p4 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_debt_mortgage,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 채무보유액 - 주택담보대출") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p4, tooltip = "text", width=700, height=500)
+
+
+p5 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_debt_deposit,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 채무보유액 - 예적금유가증권담보대출") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p5, tooltip = "text", width=700, height=500)
+
+
+p6 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=avg_debt_collateral,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 평균 채무보유액 - 물건담보대출 ") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p6, tooltip = "text", width=700, height=500)
+```
+
+제주도의 채무보유액은 상효동이 압도적으로 높으며, 대체로 서귀포시의 채무보유액이 더 높음을 확인할 수 있었다. 
+
+제주도는 신용대출이나 비은행대출보다는 주택담보대출과 물건 담보대출을 더 많이 이용함을 확인할 수 있었다. 
+
+다만 어떤 종류든 간에 대출금액이 높았던 상효동이 예적금유가증권담보대출에서는 아주 작은 값을 보였으며,제주도의 해안동이 가장 높은 것을 확인할 수 있었다. 
+
+> End of Tab
+
+---
+
+### 주택 & 자가용 재산 
+
+```{r jeju_residence}
+p1 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=medium_resid_rat,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 중대형이상 거주비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p1, tooltip = "text", width=700, height=500)
+
+
+p2 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=large_resid_rat,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 대형 거주비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p2, tooltip = "text", width=700, height=500)
+
+p3 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=vehicle_own_rat,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 중대형이상 거주비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p3, tooltip = "text", width=700, height=500)
+```
+
+소득과 소비가 모두 높았던 상효동은 거주 형태는 대형/중대형이상이 많지 않았으나, 자가용을 소유하고 있는 비율이 높았다.
+
+제주도 전반적으로 시내에서 먼 지역들은 자가용을 소유하고 있는 것으로 보인다. 
+
+> End of Tab
+
+---
+
+### 직업 
+
+```{r jeju_job}
+p1 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_majorc,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 대기업 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p1, tooltip = "text", width=700, height=500)
+
+p2 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_smallc,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 지역별 중소기업 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p2, tooltip = "text", width=700, height=500)
+
+p3 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_public,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 지역별 공기업 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p3, tooltip = "text", width=700, height=500)
+
+p4 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_profession,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 전문직 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p4, tooltip = "text", width=700, height=500)
+
+p5 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_self,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 자영업 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p5, tooltip = "text", width=700, height=500)
+
+p6 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_none,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 무직 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p6, tooltip = "text", width=700, height=500)
+
+p7 <- merge_result2 %>% ggplot(aes(x=long, y=lat, group=group, fill=job_other,text = paste('읍면동:',EMD_KOR_NM))) + 
+  geom_polygon(color="white") + labs(title="지역별 기타 비율") + 
+  scale_fill_gradient(high="red", low="lavenderblush") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5, size=15))
+ggplotly(p7, tooltip = "text", width=700, height=500)
+```
+
+대기업, 중소기업, 공기업, 전문직의 경우 모두 제주도 내의 시내에 밀집되어 있었으며, 주로 관광지가 많은 읍,면의 지역에는 자영업이 많음을 확인할 수 있었다.
+
+대기업은 색달동, 중소기업은 영남동, 전문직은 제주시에 많으며, 자영업 비율은 남원읍이 가장 높았다. 
+
+> End of Tab
+
+
+---
+
+## 주성분분석
+
+```{r data_jeju}
+data2 <- read.csv("jeju_financial_life_data.csv")
+data2$zip_cd <- as.factor(data2$zip_cd)
+data2$sex <- as.factor(data2$sex)
+levels(data2$sex) <- c("Male", "Female")
+data2$age <- as.factor(data2$age)
+```
+
+jeju_financial_life_data.csv에 있는 우편번호, 성별, 나이 변수를 범주화했다.
+
+```{r jeju}
+jeju <- NULL
+zipcd <- as.character(data2$zip_cd)
+for (i in 1:nrow(data2)){
+  temp <- substring(zipcd[i], 1, 3)
+  if (temp %in% c("635", "636")){
+    jeju[i] <- "SEOG"
+  } else if (temp %in% c("630", "631", "632", "633")) {
+    jeju[i] <- "JEJU"
+  } else {
+    jeju[i] <- NA
+  }
+}
+data2$jeju <- as.factor(jeju)
+table(data2$jeju)
+```
+
+데이터 내에 있는 zip_cd를 이용해 크게 제주시/서귀포시로 2범주화하는 작업을 거쳤다. 제주시는 우편번호가 630/631/632/633/634로 시작하는 반면 서귀포시는 635/636으로 시작한다. 
+
+```{r level}
+levels(data2$age) <- c("20s", "20s", "30s", "30s", "40s", "40s",
+                       "50s", "50s", "60s", "60s", "70s", "70s",
+                       "90s")
+table(data2$age)
+```
+
+credit_card_data.csv 데이터와 분석방향을 유사하게 진행하기 위해 jeju_financial_life_data.csv 데이터에 있는 나이 변수의 단위를 5세에서 10세 단위로 변환하였다.
+
+```{r pca_jeju, fig.width=6, fig.height=4}
+data <- data2[, -c(1:6, 25:26, 28)] 
+pca <- prcomp(data, scale=T)
+summary_pca <- summary(pca)
+knitr::kable(summary_pca$importance[,1:10], digits = 3)
+
+pca_df <- data.frame(num_pc=1:ncol(data), Eigenvalue=(pca$sdev)^2)
+pca_df %>% ggplot(aes(x=num_pc, y=Eigenvalue)) + geom_point() + geom_line() +
+  geom_hline(yintercept=1, linetype='dashed', color='red', size=1) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size=15) ) +
+  labs(title="Scree plot", 
+       x="Number of PC", y="Eigenvalue")
+```
+
+scree plot에서 PC4까지의 고윳값이 1이상임을 확인하였고, PC1 ~ PC4는 입력변수 공간 전체 분산의 약 55%를 설명하였다. 여기서는 PC1 ~ PC4를 사용하여 데이터 탐색을 진행하였다.
+
+---
+
+```{r biplot_jeju, fig.width=6, fig.height=5}
+autoplot(pca, label = F, 
+         loadings.label=T, loadings.label.colour="red", loadings.colour="black",
+         loadings.label.repel=T,
+         alpha=0.2, shape=15, size=2, colour="#24239D") + 
+  theme(panel.background=element_rect(fill="#E3E3EE"), aspect.ratio = 1) + theme_bw()
+```
+
+원데이터의 변수들간의 관계를 알아보기 위해 PC1과 PC2를 x, y축으로 설정하여 행렬도를 그려보았다. 행렬도에 나타난 변수 관계의 특성상 가까운 거리와 방향일수록 변수들의 양의 상관성이 높아지게 된다.
+
++ job_none과 med_income은 가장 거리가 멀고 반대 방향을 보이는데, 이는 무직의 비율과 중위 연소득이 강한 음의 상관관계임을 보여준다.
+
++ avg_debt_credit, avg_income가 서로 가까운 곳에 위치하므로 신용대출 채무 평균 보유액과 평균 연소득은 양의 상관관계임을 알 수 있다.
+
++ vehicle_own_rat, avg_spend는 거리는 다르지만 동일한 방향에 있기 때문에 매우 강한 양의 상관관계이다.
+
+---
+
+```{r heatmap_jeju, fig.height=6, fig.width=5}
+PC1 <- pca$rotation[,1]
+PC2 <- pca$rotation[,2] 
+PC3 <- pca$rotation[,3] 
+PC4 <- pca$rotation[,4] 
+data_heatmap <- data.frame(variable=rep(colnames(data),2),
+                           PC=rep(c("PC1", "PC2", "PC3", "PC4"), each=ncol(data)),
+                           coef=c(PC1, PC2, PC3, PC4))
+ggplot(data_heatmap, aes(PC, variable)) +
+  geom_tile(aes(fill = coef)) +
+  scale_fill_gradientn(colors = rev(brewer.pal(5, "RdBu"))) +
+  scale_y_discrete(limits = rev(unique(data_heatmap$variable))) +
+  geom_text(aes(label = round(coef, 2))) +
+  ggtitle("Heatmap of Principal Components") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(angle = 90),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
+처음 행렬도를 그렸을 때, job_none과 med_income이 강한 음의 상관관계를 보였으므로 각 변수 위주로 히트맵을 해석했다. 또한 각 PC내에서 변수들의 관계를 파악할 때, 계수의 절댓값이 0.2 이상인 변수들을 중점적으로 보았다.
+
+**(1)** PC1에서 job_none의 계수를 제외한 다른 변수의 계수들의 방향이 같다. 직업 관련 변수에서 PC1 점수 값이 크면 job_none의 값은 작지만 job_majorc, job_smallc, job_public의 값이 크다. 또한 PC1 점수 값이 클수록 avg_income, med_income, avg_spend, avg_debt, avg_debt_credit, avg_debt_mortgage, avg_debt_collateral, vehicle_own_rat의 값이 크다.
+
+**(2)** PC2에서는 job_none과 더불어 avg_deb, avg_deb_noneb, avg_debt_mortgage, avg_debt_collateral은 같은 방향이고 이와 반대 방향인 med_income은 job_majorc, job_smallc, job_public, job_other, avg_spend와 함께 같은 방향이다.
+
+**(3)** PC3에서는 PC2와 유사하게 job_none을 중심으로 부채관련 변수에서 avg_debt_noneb, avg_debt_mortgage, avg_debt_collateral의 점수가 높게 나왔다. 이 외의 관련 변수에서 job_profession, avg_spend 역시 계수들의 방향이 같다. 반면 med_income, avg_income, job_self, avg_debt_credit의 계수들은 PC3와 반대방향이다. 
+
+**(4)** PC4에서는 다른 PC들과 달리 job_none과 med_income의 계수 방향이 같다. 또한 job_smallc, avg_credit_rat, vehicle_own_rat은 음의 계수를 갖는다. 반면 job_profession, job_other를 중심으로 다른 변수들은 양의 계수이다.
+
++ **결론**
+
+  + PC1 값이 클수록 무직의 비율은 낮아지지만 평균 연소득과 채무 평균보유액은 증가한다. 
+  
+  + PC2 값이 클수록 무직의 비율이 높고 채무 평균보유액과 더불어 부채 관련 변수의 값이 큰 경향이 있다.
+  
+  + PC3 값이 클수록 무직의 비율이 높고 특히 은행대출, 주택담보대출, 물건담보대출의 채무 평균보유액이 큰 편이다. 반대로 PC3 값이 작을수록 평균 및 중위 연소득이 높고 자영업자의 비율이 높으며 신용도 평균 관리지수가 높은 편이다.
+  
+  + PC4 값이 클수록 전문직의 비율과 판단 불가의 직업군의 비율이 높은 반면 중소기업 직업군의 비율, 평균 신용도 관리 지수와 중대형 차량 소유비율이 낮다.
+
+
+
+---
+
+```{r pcplotjeju, fig.width=12, fig.height=5}
+PC <- data.frame(variabe=names(PC1), PC1, PC2, PC3, PC4)
+rownames(PC) <- NULL
+PC1_score <- pca$x[,1]
+PC2_score <- pca$x[,2]
+PC3_score <- pca$x[,3]
+PC4_score <- pca$x[,4]
+
+df <- cbind(PC1=PC1_score, PC2=PC2_score, PC3=PC3_score, PC4=PC4_score, data2[, c("jeju", "age", "sex")])
+
+# 제주시/서귀포시
+p1 <- df %>% ggplot(aes(x=PC1, y=PC2, color=jeju)) + geom_point(size=2, shape=15, alpha=0.5) +
+  ggtitle("제주시/서귀포시 시각화") + scale_color_tableau() + theme_bw() +
+  theme(aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15)) + 
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=1) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=1)
+
+p2 <- df %>% ggplot(aes(x=PC3, y=PC4, color=jeju)) + geom_point(size=2, shape=15, alpha=0.5) +
+  ggtitle("제주시/서귀포시 시각화") + scale_color_tableau() + theme_bw() +
+  theme(aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=1) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=1)
+
+grid.arrange(p1, p2, ncol=2)
+```
+
++ (PC1, PC2), (PC3, PC4)를 각각 x, y축으로 설정해 앞서 생성한 제주시/서귀포시로 나눈 지역, 연령대별, 성별로 구분해 총 6개의 plot을 생성했다.  해당 plot에서 확인할 수 있듯이 각 지역의 특성을 설명하기 어렵다. 
+
+---
+
+```{r pcplotage, fig.width=12, fig.height=5}
+# 연령대별
+p1 <- df %>% ggplot(aes(x=PC1, y=PC2, color=age)) + geom_point(size=2, shape=15, alpha=0.5) +
+  scale_color_tableau() + theme_bw() +
+  theme(aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 시각화") +
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=1) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=1)
+
+p2 <- df %>% ggplot(aes(x=PC3, y=PC4, color=age)) + geom_point(size=2, shape=15, alpha=0.5) +
+  scale_color_tableau() + theme_bw() +
+  theme(aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("연령대별 시각화") + 
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=1) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=1)
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+연령대 PC plot에서는 (PC1, PC2)가 각 축일 때 다음과 같이 구분할 수 있고 이에 따른 해석은 다음과 같다.
+
++ 1사분면은 무직의 비율은 낮고, 평균 연소득과 채무 평균보유액이 높은 그룹
++ 2사분면은 무직의 비율과 채무 평균보유액이 높고, 평균 연소득이 낮은 그룹
++ 3사분면은 무직의 비율이 높고, 평균 연소득과 채무 평균보유액이 낮은 그룹
++ 4사분면은 무직의 비율과 채무 평균보유액이 낮고, 평균 연소득이 높은 그룹
+
+
+  + 60대 이상의 노년층은 채무 평균보유액이 크다.
+  + 20대는 일반적으로 무직인 경우가 많고 평균 연소득과 채무 평균보유액 모두 낮다.
+  + 30대와 40대는 주로 무직인 경우가 적고 평균 연소득이 높다.
+
+---
+
+```{r pcplotsex, fig.width=12, fig.height=5}
+p1 <- df %>% ggplot(aes(x=PC1, y=PC2, color=sex)) + geom_point(size=2, shape=15, alpha=0.5) +
+  scale_color_tableau() + theme_bw() +
+  theme(aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별에 따른 시각화") + 
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=1) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=1)
+
+p2 <- df %>% ggplot(aes(x=PC3, y=PC4, color=sex)) + geom_point(size=2, shape=15, alpha=0.5) +
+  scale_color_tableau() + theme_bw() +
+  theme(aspect.ratio = 1,
+        plot.title = element_text(hjust = 0.5, size=15)) +
+  ggtitle("성별에 따른 시각화") + 
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=1) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=1)
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+
+성별 PC plot에서는 (PC3, PC4)가 각 축일 때 다음과 같이 구분할 수 있고 이에 따른 해석은 다음과 같다.
+
++ 1사분면은 자영업자의 비율과 신용도 평균관리지수가 모두 낮은 그룹
++ 2사분면은 자영업자의 비율은 높지만 신용도 평균관리지수가 낮은 그룹
++ 3사분면은 자영업자의 비율과 신용도 평균관리지수가 모두 높은 그룹
++ 4사분면은 자영업자의 비율은 낮지만 신용도 평균관리지수가 높은 그룹
+
+  + 남자인 자영업자의 비율이 높게 나온다.
+
+---
+
+## 클러스터링
+
+```{r cor_jeju, fig.width=8, fig.height=8}
+data0 <- data2[, -c(1:6, 25:29)]
+data0 <- scale(data0)            
+
+# 상관계수 높은 변수 제거
+corrdata0 <- cor(data0)
+cor.mtest <- function(mat, ...) {
+  mat <- as.matrix(mat)
+  n <- ncol(mat)
+  p.mat<- matrix(NA, n, n)
+  diag(p.mat) <- 0
+  for (i in 1:(n - 1)) {
+    for (j in (i + 1):n) {
+      tmp <- cor.test(mat[, i], mat[, j], ...)
+      p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+    }
+  }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+cor_pvalue_L <- cor.mtest(data0)
+
+corrplot(corrdata0, method="color",  
+         type="upper",
+         addCoef.col = "grey30", addCoefasPercent = T,
+         # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         p.mat = cor_pvalue_L, sig.level = 0.05,
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE )
+data0 <- scale(data0[, -c(2, 5, 9, 17, 14)])
+```
+
++ 앞서 실행한 PCA 결과에 기반해 중위연소득(med_income)과 무직의 비율(job_none) 위주로 correlation plot을 해석했다.
+
+**(1)** 중위연소득이 높을수록 대기업/중소기업/공기업/판단불가 직업의 비율은 높은 반면 무직의 비율은 낮다.
+
+**(2)** 중위연소득이 높을수록 평균 소비액, 채무 평균보유액, 신용대출 채무 평균보유액이 크다.
+
+**(3)** 무직의 비율이 낮을수록 대기업/중소기업/공기업/자영업의 비율은 높지만 평균/중위연소득, 평균 소비액, 신용대출 채무 평균보유액이 낮다.
+
+
++ 또한 좋은 성능의 clustering을 위해 correlation plot에서 값이 50이 넘어가는 변수의 조합 중 일부 변수를 제거하기로 결정했다. job_smallc, job_self, med_income, avg_debt_collateral, avg_debt_noneb 총 5개의 변수를 제거하고 남아있는 변수에 대해 스케일링을 진행했다.
+
+---
+
+### 클러스터 수 정하기
+
+```{r wssplot_jeju, fig.width=6, fig.height=4}
+set.seed(26)
+k.max <- 10
+wss <- sapply(1:k.max, function(k){kmeans(data0, k, nstart=25, iter.max=100)$tot.withinss})
+
+cluster_df <- data.frame(num_cluster=1:k.max, wss=wss)
+cluster_df %>% ggplot(aes(x=num_cluster, y=wss)) + geom_point() + geom_line() +
+  geom_hline(yintercept=wss[6], linetype='dashed', color='red', size=1) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size=15) ) +
+  labs(title= "Total within-clusters sum of squares", 
+       x= "Number of clusters k", y="Total within-clusters sum of squaures")
+```
+
+
+```{r silhouette_jeju, fig.height=8}
+set.seed(26)
+for (i in 2:7){
+  kmeans_res <- kmeans(data0, centers=i, nstart = 25, iter.max = 100)
+  sil <- silhouette(kmeans_res$cluster, dist(data0))
+  assign(paste0("p",i-1), fviz_silhouette(sil, print.summary=F)+ scale_color_tableau() + scale_fill_tableau())
+}
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+클러스터 갯수를 정하기 위해 within-clusters sum of squares plot과 silhouette plot을 그려보았다. 모두 참고한 결과 3개의 클러스터가 적당하다고 판단했다.
+
+```{r clusterplot_jeju}
+pca <- prcomp(data0, retx=T)
+PC1_score <- pca$x[,1]
+PC2_score <- pca$x[,2]
+set.seed(26)
+km <- kmeans(data0, centers=3, nstart = 25, iter.max = 100)
+cluster_df <- data.frame(PC1=PC1_score, PC2=PC2_score,
+                         cluster=factor(km$cluster))
+
+p <- ggplot(data=cluster_df, aes(x=PC1, y=PC2)) + 
+  geom_point(aes(color=cluster, shape=cluster), size=2, alpha=0.5) + 
+  theme_bw() + 
+  theme(plot.title = element_text(hjust=0.5, size=20)) +
+  ylim(c(-8,8)) + xlim(c(-8,8)) +
+  scale_shape_manual(values=c(15, 16, 4, 18, 8, 17)) +
+  scale_color_tableau() +
+  ggtitle("클러스터링 결과 시각화") +
+  geom_hline(yintercept=0, linetype='dashed', color='red', size=0.5) +
+  geom_vline(xintercept=0, linetype='dashed', color='red', size=0.5)
+ggplotly(p, width=600, height=500)
+
+```
+
+클러스터링 결과를 PC1과 PC2를 이용하여 시각화 해본 결과 클러스터가 비교적 잘 나누어진 것을 확인할 수 있었다.
+
+### 클러스터별 특성
+
+또한, 센터값을 통해 각 클러스터의 의미를 명확히 이해하고자 하였으며 아래와 같은 결과를 얻을 수 있었다. 
+
+```{r cluster_res_jeju}
+cluster_centers <- data.frame(t(km$centers))
+colnames(cluster_centers) <- paste("Cluster", 1:3)
+data_heatmap <- data.frame(variable=rep(rownames(cluster_centers), ncol(cluster_centers)),
+                           cluster=rep(colnames(cluster_centers), each=nrow(cluster_centers)),
+                           coef=c(cluster_centers$`Cluster 1`, cluster_centers$`Cluster 2`,
+                                  cluster_centers$`Cluster 3`))
+ggplot(data_heatmap, aes(cluster, variable)) +
+  geom_tile(aes(fill = coef)) +
+  scale_fill_gradientn(limits = c(-1.5,1.5), colors = rev(brewer.pal(5, "RdBu"))) +
+  scale_y_discrete(limits = rev(unique(data_heatmap$variable))) +
+  geom_text(aes(label = round(coef, 2))) +
+  ggtitle("Heatmap of Cluster centers") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(angle = 90),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  theme(legend.title = element_blank(), legend.spacing.x = unit(0.3, 'cm'),
+        plot.title = element_text(hjust = 0.5, size=15))
+```
+
+|클러스터|무직 비율 |평균 연소득 | 평균 소비액 | 채무 평균보유액| 신용도 평균관리지수 | 
+:-------:|:--------:|:----------:|:-----------:|:--------------:|:-------------------:|
+|1       |low       | high       | high        | high           |low                  |
+|2       |high      | low        | low         | low            |low                  |
+|3       |low       | middle     | high        | low            |high                 |    
+
+---
+
+# 결론 
+
+## Persona
+
+지금까지 제공된 데이터를 여러 방면으로 살펴보았다. 이를 바탕으로 각 클러스터와 제주도 도민의 페르소나를 만들어 고객별 특징을 깊게 이해해보고자 하였다. **각 페르소나는 클러스터의 가장 두드러지는 특징을 담았다**.
+
+### 수도권의 노년 
+
+
+클러스터 1 : 수도권의 노년
+
+'수도권의 노년' 클러스터는 수도권의 80대, 90대가 속해있다. 
+
+다음은 '수도권의 노년'에 속하는 이항제씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/702/702010.svg")
+```
+
++ 이름: 이항제 (88세) 
+
++ 거주지 : 서울 
+
++ 직업 : 무직 
+
++ 결혼 상태 : 기혼
+
++ 자녀 : 4명 (딸 64세, 딸 63세, 아들 61세, 아들 58세)
+
+
++ 상황: 
+
+1) 외로움, 주변인이 자꾸 죽음, 노년이 남는 인생취급받음. 
+
+2) 한국전쟁을 겪었고 격변하는 시대를 살았기에 세대차이가 크고  가족과의 의사소통이 서툴어 자녀와 관계 원만하지 않음. 
+
+3) 몸이 아픔. 연금으로 생활을 유지하긴 힘듦. 자식들도 노년을 바라보고 있음. 
+
++ **관심사** : 장례방법, 내가 죽은 뒤 아내가 살곳. 상속해줄 재산  없음. 의료보험 안됨.
+
++ **고민** : 주로 의료비. 아내가 치매증상이 보여 요양원 보내야  할지도. 보험안되어 건강 걱정 
+
++ **목표** : 담보대출을 통해 살아가는 것, 내가 죽은 후 아내의 삶
+
+ **" 지금 가진 집과 고향의 작은 땅으로 남은 인생을 살아 갈수 있나? " **
+
+---
+
+
+### 제 2의 전성기 
+
+클러스터 2 : 제 2의 전성기
+
+'제 2의 전성기' 클러스터는 50대부터 70대의 고객들이 속해 있으며, 특히 큰 도시의 50-70대 고객들이 많이 속해있었다. 90대가 속해있다. 
+
+다음은 '제 2의 전성기'에 속하는 박정훈씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/702/702003.svg")
+```
+
+
++ 이름: 박정훈 (63세) 
+
++ 거주지 : 울산 
+
++ 직업 : 현대차 임직원출신, 중소기업 재직 중
+
++ 결혼 상태 : 기혼
+
++ 자녀 : 2명 (아들 30세, 딸 25세)
+
+
++ 상황 : 
+
+1) 노후 대비가 완전히 다 되어있진 않고, 곧 은퇴, 외벌이
+
+2) 지금 당장은 직장도 돈이 있지만 곧 끝나고 돈 빌릴일만 남았음.
+
+3) 이제 은퇴가 다가오는데 돈 들어갈 미래가 너무 많음.
+
++ **관심사** :  은퇴 후의 삶, 전성기를 누리고 싶지만 미래가 밝지 않음.
+
++ **고민** : 결혼 적령기 아들 집 마련, 막내딸 대학교 학비를 내야 함.
+
++ **목표** : 은퇴후 새로운 소득 창출
+
+**" 새로운 사업을 해고 싶은데 어디서 대출을 받지? " **
+
+**" 부동산이나 주식투자를 해볼까?" **
+
+**" 집을 팔고 외곽으로 가야하나? " **
+
+---
+
+### 서투른 10대  
+
+클러스터 3 : 서투른 10대
+
+'서투른 10대' 클러스터는 전국의 10대 고객들이 속해있다. 
+
+다음은 '서투른 10대'에 속하는 유지영씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/702/702017.svg")
+```
+
++ 이름 : 유지영 (만 19세) 
+
++ 거주지 : 전북
+
++ 직업 : 중소기업 재직 중
+
++ 결혼 상태 : 미혼
+
+
++ 상황 : 
+
+1) 신용도 나쁨, 저축은행 대출 보유 
+
+2) 돈은 빌려야 하는데 저축은행 말고는 대출해주는 곳이 없음
+
+3) 고등학교 졸업 후 중소기업에 막 취업한 사회 초년생
+
+4) 급하게 돈이 필요한 일이 많아 저축은행 대출을 자주 이용함 
+
+5) 월세를 내며 살고 있는데 쥐꼬리 만한 월급이 월세로 없어지는 것을 보며 한탄
+
++ **관심사** : 전세 보증금을 마련하기 위한 목돈 필요
+
++ **고민** : 저축은행 대출에 따른 신용점수 하락 
+
++ **목표** : 월세를 전세로 바꾸기 위한 목돈 만들기
+
+
+**" 신용 점수 하락 없이 소액대출을 받을 수 있는 방법은? " **
+
+
+---
+
+
+### 전전긍긍 20대  
+
+클러스터 4 : 전전긍긍 20대
+
+'전전긍긍 20대' 클러스터는 전국의 20대 고객들이 속해있다. 
+
+다음은 '전전긍긍 20대'에 속하는 김수지씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/702/702018.svg")
+```
+
++ 이름 : 김수지 (만 27세) 
+
++ 거주지 : 강원
+
++ 직업 : 중소기업 재직중
+
++ 결혼 상태 : 미혼
+
+
++ 상황 : 
+
+1) 출퇴근을 위해 자동차 구매와 할부금융과 저축은행 말고 대출해주는 곳이 없음 
+
+2) 월세와 부모님 용돈, 관리비 등 고정지출이 크며, 비정기적 지출이 꽤 큼
+
+3) 1, 2년 내로 현재 남자친구와 결혼 생각중
+
++ **관심사** : 자동차 이후의 결혼 계획을 위한 목돈 필요
+
++ **고민** : 저축은행 대출에 따른 신용점수 하락 
+
++ **목표** : 자동차를 산 이후에도 결혼에 필요한 목돈까지 여유롭게 마련하기
+
+**" 할부금융을 이용한 자동차 구매 이후 신용점수 하락없이 대출받는 방법은? " **
+
+**" 결혼 계획 등을 위한 2-3년 저축 상품은? " **
+
+
+---
+
+
+### 비수도권의 노년
+
+클러스터 5 : 비수도권의 노년
+
+'비수도권의 노년' 클러스터는 전국의 70대에서 90대 까지의 고객들이 속해있다. 
+
+다음은 '비수도권의 노년'에 속하는 이기자씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/1588/1588867.svg")
+```
+
++ 이름 : 이기자 (만 83세) 
+
++ 거주지 : 부산 
+
++ 직업 : 퇴직 
+
++ 결혼 상태 : 결혼 했으며 40년을 함께하는 79세 아내가 있다. 아내는 수영교실을 다닐 정도로 건강을 살뜰히 챙기는 편
+
++ 자식 : 아들 둘(50세, 54세), 딸 둘 (52세, 48세)
+
+
++ 상황 : 
+
+1) 과거 벽돌 제조 창업을 하여 돈을 쏠쏠히 벌었었지만 현재는 콘크리트의 우세로 인해 벽돌 제조 사업을 청산
+
+2) 집 몇 개를 사둔 상태
+
+3) 과거 6.25 시대에 죽도록 굶어본 경험이 있다. 그 경험 때문에 돈은 되도록이면 쓰지 않는 편이고, 빚도 지지 않으려고 하는 구두쇠 적인 면이 있다. 
+
++ **관심사** : 가족의 번영과 사망까지의 안정적인 생활
+
++ **고민** : 장손이 능력이 없어 스스로 살아갈 수 있을지가 걱정이다. 최근에는 스위스로 시계를 배우러 유학을 희망하고 유학비용을 대달라고 부탁했다.
+
++ **목표** : 모아 놓은 돈으로 욕심 없이 노후를 풍족하게 살아가기
+
+**" 보험계약대출이라는 게 있던데? " **
+
+---
+
+
+### 일이 많은 중장년
+
+클러스터 6 : 일이 많은 중장년
+
+'일이 많은 중장년' 클러스터는 전국의 30대에서 50대 까지의 고객들이 속해있다. 
+
+다음은 '일이 많은 중장년'에 속하는 정진혁씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/701/701997.svg")
+```
+
++ 이름 : 정진혁 (만 42세) 
+
++ 거주지 : 경기 
+
++ 직업 : 대기업 재직 중  
+
++ 결혼 상태 : 기혼
+
++ 자식 : 아들5 세, 딸 7세
+
+
++ 상황 : 
+  
+1) 맞벌이와 대기업 재직으로 어느정도 안정적인 수입 창출 
+
+2) 하지만 자녀들의 성장으로 많은 돈이 필요로 하는 시기
+
+3) 아이들이 커가며 교육을 위해 학군이 좋은 곳으로 이사가고 싶음
+
+4) 앞으로 돈 들어갈 곳이 많아서 저축을 해야하고, 집을 마련해야함
+
++ **관심사** : 근로 소득 이외의 자본소득 창출 
+
++ **고민** : 늦은 결혼으로 퇴직 후 자녀들의 학비 및 결혼 자금 지원, 은퇴자금 준비
+
++ **목표** : 내집마련 : 학군과 직장과의 거리를 고려해서 집 선택 필요
+
+**" 어떤 대출을 받아야 장기적으로 이득이 될까? " **
+
+
+---
+
+
+### 제주도민
+
+Cluster 7 : 제주도민
+
+'제주도민' 클러스터는 제주도의 고객들이 속해있다. 
+
+다음은 '제주도민'에 속하는 김에스더씨의 프로필이다.
+
+---
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/1108/1108108.svg")
+```
+
++ 이름 : 김에스더 (만 38세) 
+
++ 거주지 : 제주도 남원읍
+
++ 직업 : 70만 구독자 보유 및 프리랜서 투어가이드 
+
++ 결혼 상태 : 이혼
+
++ 가족 : 리트리버 두 마리
+
+
++ 상황 : 
+
+1) 자녀는 없지만 리트리버 두마리와 함께 마당있는 집 거주  
+
+2)  ‘효리네민박’ 이후 제주도에 관광객이 더 많아지며 채널도 성장중
+
+3) 제주도를 배경으로 지속적인 컨텐츠를 만들어 내고 싶음.
+
+4) 동물을 키우는 만큼 동물에 관심이 많고, 환경보호, 비건까지 관심이 확장되었음. 
+
++ **관심사** : 환경보호, 비건, 동물보호 
+
++ **고민** : 불규칙적인 수입, 노후준비, 컨텐츠 만드는데 비용 
+
++ **목표** : 유기동물 보호소 설립
+
+**" 나의 불규칙적인 수입을 어떻게 관리해야 할까? " **
+
+
+---
+
+## 서비스 활용방안
+
+각 클러스터 별 페르소나를 정리해보았다. 앞서 정리한 클러스터 별 센터값과 함께 페르소나를 참고하여 각 클러스터의 고객들에게 금융 서비스를 추천할 수 있다. 
+
+순서는 아래와 같다.
+
+**1)** 고객이 최소한의 정보를 제공했을 때 보여줄 수 있는 추천 상품
+
+  + 고객이 본인의 기본 정보(연령과 지역) 제공
+
+  + 고객은 가볍고 부담없이 본인에게 맞는 상품을 확인 가능
+
+**2)** 고객이 본인의 금융상황, 대출이 필요한 이유와 대출 원하는 금액 등 더 자세한 정보를 제공할 시 기업이 포트폴리오 제공
+
+  + 위에 제시한 페르소나와 유사한 형식의 포트폴리오를 통해 보다 구체적인 서비스(현 상황에 맞는 다양한 상품 추천, 자산 관리 방법 등)를 제공
+
+  + 분위수 확인
+
+      + 고객이 속하는 클러스터에서 본인의 분위수를 확인 가능
+
+      + 분위수는 소득 및 자산(집, 자동차 등)을 기준으로 정해짐.
+
+      + 같은 클러스터에서 고객과 비슷한 상황에 있는 다른 사람들이 이용하는 상품 알림 
+
+
+### 예시
+
+**분석 결과**
+
+  + 실제 사용 카드수는 경기, 대전, 부산,
+
+  + 월 카드 총 이용금액은 제주도,
+
+  + 할부금융업종 총 대출 금액은 강원도,
+
+  + 지역별 보험업종 총 대출금액과 한도대출 총 약정금액은 울산의 평균값이 가장 높았다.
+
+**강원도민을 위한 솔루션** : 
+
+  **1)** 행정구역별 평균 1인당 개인소득에서 강원도는 약 1500-1600만원대로 타지역에 비해 낮은 편이다.
+
+  **2)** 고령인구비율이 17.16% ~ 18.06%로 타지역에 비해 높은 편이다.
+    
+  + 해당사실을 통해 TV광고에서 쉽게 접할 수 있는 할부금융말고도 노령인구에게 다양한 상품을 제시해본다. 나아가 신용 등급을 높이는 방법에 대해서도 원데이클래스와 같은 단기 교육을 실시해본다.
+
+  + 할부금융 대출금액이 강원도에서 가장 높게 나왔는데, 할부금융의 경우 이자율은 4 ~ 5.5%이지만 신용도 하락에 큰 영향을 줄 수 있기 때문에 할부금융보다는 신용카드 활성화 및 제 1금융을 활용할 수 있는 방안을 제시한다.
+
+  + 혹은 보험계약대출과 같이 신용등급에 영향을 끼치지 않는 대출 상품을 소개한다.
+
+
+---
+
+> 클러스터 4에 속한 김수지씨를 위한 금융상품은 어떻게 제시하는 것이 좋을까?
+
+```{r, echo=F, out.width="30%"}
+knitr::include_graphics("https://image.flaticon.com/icons/svg/702/702018.svg")
+```
+
+김수지씨는 현재 강원도에 위치한 중소기업에 재직중이며 자동차 구매와 결혼을 고려중이다. 확인 결과 김수지씨는 클러스터 4에서 상위 34%에 속한다. 통계청 결과에 따르면 강원도의 평균 1인당 개인소득은 약 1500 - 1600만원대로 타지역에 낮은 편인데, 김수지씨의 연봉은 약 1800만원으로 상당히 높은 편이며 할부 금융 대출을 종종 이용했다. 하지만 신용도 하락과 대출 이자의 부담으로 인해 다른 상품을 알아보고 있다. 이런 상황에 처해있는 수지씨에게 신용카드 사용과 신용등급에 영향을 끼치지 않는 보험 계약 대출을 추천한다면 김수지씨는 기꺼이 이용할 것이다. 이처럼 '전전긍긍 20대'에 속하는 또다른 김수지씨에게 필요한 대출 상품을 추천해주는 서비스를 제공할 수 있다. 
+
+---
+

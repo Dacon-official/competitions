@@ -1,0 +1,92 @@
+---
+title: "jeju data"
+author: "주은혁"
+date: "2019년 7월 8일"
+output: html_document
+---
+https://www.epost.go.kr/search/zipcode/areacdAddressDown.jsp
+
+해당 사이트에서 우편번호의 공공데이터를 다운
+
+해당 우편번호의 데이터와 기존 jeju_financial_life_data와 결합
+
+```{r}
+setwd("C:\\Users\\wndms\\Desktop\\공모전\\Dacon (")
+jeju <- read.csv("jeju_financial_life_data.csv", stringsAsFactors = F, fileEncoding = "UTF8")
+zipcode <- read.csv('jeju_zipcode_db.txt', stringsAsFactors = F, sep='|')
+
+library(dplyr)
+library(stringr)
+
+# 사용할 변수 선택 및 변수명 변경
+zip <- zipcode %>%
+  select(우편번호, 시군구, 행정동명) %>%
+  rename(zip_cd=우편번호,
+         city=시군구,
+         district=행정동명)
+
+# 결측치 제거
+zip$district[zip$district==""] <- NA
+zip <- na.omit(zip)
+zip <- unique(zip)
+
+zip %>% group_by(zip_cd, district) %>% summarise(n=n()) %>% 
+  group_by(zip_cd) %>% summarise(n=n()) %>% 
+  filter(n>=2)
+# 한 우편번호에 여러 행정동이 중복되는 경우 left_join이 매커니즘에 따라 랜덤하게 배정한다.
+
+jeju_with_zip <- jeju %>% left_join(zip, by='zip_cd')
+
+write.csv(jeju_with_zip, 'jeju_with_zipcode.csv', row.names=F)
+
+
+
+```
+
+해당 우편번호와 동을 결합한 파일을 가지고 Tableau에서 사용하기 위해 전처리
+
+```{r}
+jeju1<-read.csv("jeju_with_zipcode.csv",stringsAsFactors = F)
+# 필요없는 열 삭제, 전체적인 전처리
+jeju1<-jeju1 %>% 
+  select(-c(medium_resid_rat,large_resid_rat,vehicle_own_rat)) %>% 
+  mutate(성별=ifelse(jeju1$sex==1,"남자","여자"),
+           연령별=ifelse(jeju1$age %in% c(24,29),"20대",
+                      ifelse(jeju1$age %in% c(34,39),"30대",
+                             ifelse(jeju1$age %in% c(44,49),"40대",
+                                    ifelse(jeju1$age %in% c(54,59),"50대",
+                                           ifelse(jeju1$age %in% c(64,69),"60대",
+                                                  ifelse(jeju1$age %in% c(74,79),"70대","기타")))))),
+           연평균소비=jeju1$avg_spend*4,연평균해외소비=jeju1$avg_foreign_spend*4, # avg_spend는 3개월 평균 소비
+           일금융대출=(jeju1$avg_debt-jeju1$avg_debt_noneb))
+# 필요없는 열 삭제
+jeju1<-jeju1 %>% 
+  select(-c(zip_cd,year_month,sex,age,med_income,avg_spend,avg_foreign_spend,avg_debt,avg_debt_credit,avg_debt_mortgage,avg_debt_deposit,avg_debt_collateral))
+# 영문을 한글로 변경
+jeju1<-jeju1 %>% 
+  rename(경도=x_axis,위도=y_axis,대기업=job_majorc,중소기업=job_smallc,공기업=job_public,전문직=job_profession,자영업=job_self,무직=job_none,기타=job_other,연평균소득=avg_income,제2금융=avg_debt_noneb,제1금융=일금융대출)
+# 지도 시각화를 위해 지역별 그룹화
+jeju1<-jeju1 %>% 
+  group_by(district) %>% 
+  summarise(경도=mean(경도),위도=mean(위도),대기업=mean(대기업),중소기업=mean(중소기업),공기업=mean(공기업),전문직=mean(전문직),자영업=mean(자영업),
+              무직=mean(무직),기타=mean(기타),연평균소득=mean(연평균소득),제1금융=mean(제1금융),제2금융=mean(제2금융),연평균소비=mean(연평균소비),
+              연평균해외소비=mean(연평균해외소비),전체금융대출=(제1금융+제2금융),소득대비카드사용=(연평균소득/연평균소비))
+# MBTI 설정을 위한 변수 설정
+jeju1$제1금융비율<-jeju1$제1금융/jeju1$전체금융대출
+jeju1$mbti<-ifelse(jeju1$소득대비카드사용>=mean(jeju1$소득대비카드사용)&jeju1$제1금융비율>=mean(jeju1$제1금융비율),"알뜰살뜰형",
+                   ifelse(jeju1$소득대비카드사용>=mean(jeju1$소득대비카드사용)&jeju1$제1금융비율<mean(jeju1$제1금융비율),"눈앞캄캄형형",
+                          ifelse(jeju1$소득대비카드사용<mean(jeju1$소득대비카드사용)&jeju1$제1금융비율>=mean(jeju1$제1금융비율),"흥청망청형","위태위태형")))
+# 제주 전체를 위한 변수 삽입
+jeju1[44,]<-c("제주",mean(jeju1$경도),mean(jeju1$위도),mean(jeju1$대기업),mean(jeju1$중소기업),mean(jeju1$공기업),mean(jeju1$전문직),
+              mean(jeju1$자영업),mean(jeju1$무직),mean(jeju1$기타),mean(jeju1$연평균소득),mean(jeju1$제1금융),mean(jeju1$제2금융),mean(jeju1$연평균소비),
+              mean(jeju1$연평균해외소비),mean(jeju1$전체금융대출),mean(jeju1$소득대비카드사용),mean(jeju1$제1금융비율),"알뜰살뜰형") 
+# 평균과 비교해서 MBTI를 만들기 때문에 제주 전체는 알뜰살뜰형이 나오게 된다. 
+
+# 태블로에서 이미지 삽입을 위해 랜덤한 좌표 설정
+jeju1$x<-sample(44,1:10)
+jeju1$y<-sample(44,1:10)
+write.csv(jeju1,"jeju_summ.csv")
+
+
+
+```

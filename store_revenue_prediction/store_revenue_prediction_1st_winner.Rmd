@@ -1,0 +1,222 @@
+---
+title: "Dacon 7회 상점매출 예측 모델링 경진대회"  
+author: "DB분석가(이건희, 최종승)" # 팀명
+date: "2019년 9월 11일" # 제출날짜
+output: 
+  html_document:
+    toc:  true
+    toc_float:  true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. 라이브러리 및 데이터
+* 데이터를 불러올때 인코딩 문제 때문에 제공 파일을 텍스트 파일로 변환후 불러옴  
+* 데이터 테이블 형태인 fread로 텍스트 파일을 읽는다.  
+```{r,warning=FALSE,message = FALSE}
+library(data.table) # 데이터 가공, version: 3.5.3
+df<-fread("../../DATA/funda_train.csv",header=T,sep=",")
+```
+
+## 2. 데이터 전처리   
+### Data Cleansing & Pre-Processing      
+  * 날짜와 시간을 합친 transacted_datetime 변수를 생성          
+  * 환불은 로그를 씌웠을때 무한대가 나오기 때문에 제거 하기로 결정          
+  * 대회기간때는 환불제거코드 1을 사용, 환불제거 코드 2를 사용하면 속도가 더 빠름          
+  * 환불제거 코드2는 스토어별로 데이터를 분리하여 계산하여 연산량이 적음            
+  * refund 결제 후보리스트를 찾고 trasated_datetime이 가장 최근값(max)을 제거          
+  * yyyymm변수는 년도와 월을 합친 numeric 변수임          
+  * 스토어마다 월별 매출액 집계, 매출액이 0이면 2로 대치(log변환을 위함)  
+  * 최종 계산 결과를 new_data에 상점마다 rbind로 합침            
+
+```{r,warning=FALSE ,message = FALSE}
+##transacted_datetime 생성
+library(dplyr) # 데이터 가공, version: 3.5.3
+library(lubridate) # 데이터 가공(날짜), vesion 1.7.4
+
+df$transacted_datetime<-ymd_hm(paste(df$transacted_date,
+                                     df$transacted_time,sep=" "))
+df$transacted_date<-ymd(df$transacted_date)
+refund<-df%>%filter(amount<0)
+non_refund<-df%>%filter(amount>0)%>%as.data.table()
+store_id<-unique(non_refund$store_id)
+
+#환불 제거 코드1
+# for(j in 1:nrow(refund)){
+#   refund_id=refund[j,"card_id"]
+#   refund_datetime=refund[j,"transacted_datetime"]
+#   refund_amount=abs(refund[j,"amount"])
+#   refund_pay_list<-non_refund[card_id==refund_id&
+#                                 transacted_datetime<=refund_datetime&
+#                                 amount==refund_amount,]
+#   
+#   if(nrow(refund_pay_list)!=0)
+#   {
+#     refund_datetime=max(refund_pay_list$transacted_datetime)
+#     non_refund<-non_refund[!(card_id==refund_id&
+#                            transacted_datetime==refund_datetime&
+#                            amount==refund_amount)]
+#   }
+# }
+
+#환볼제거 코드2
+non_refund2<-data.frame()
+i<-1
+for(j in store_id){
+  divided_data<-non_refund[store_id==j,]
+  while(i<=nrow(refund)){
+    refund_store<-refund[i,"store_id"]
+    if(j!=refund_store)break
+    else if (j==refund_store){
+      refund_id<-refund[i,"card_id"]
+      refund_datetime<-refund[i,"transacted_datetime"]
+      refund_amount<-abs(refund[i,"amount"])
+      refund_pay_list<-divided_data[card_id==refund_id&
+                                      transacted_datetime<=refund_datetime&
+                                      amount==refund_amount,]
+      if(nrow(refund_pay_list)!=0)
+      {
+        refund_datetime<-max(refund_pay_list$transacted_datetime)
+        divided_data<-divided_data[!(card_id==refund_id&
+                                       transacted_datetime==refund_datetime&
+                                       amount==refund_amount)]
+      }
+    }
+    i<-i+1
+  }
+  non_refund2<-rbind(non_refund2,divided_data)
+}
+
+###상점별 월별 매출 집계
+### 데이터 전처리2
+non_refund<-non_refund2
+non_refund$yyyymm<-substr(non_refund$transacted_date,1,7)
+non_refund$yyyymm<-as.numeric(gsub("[[:punct:]]","",non_refund$yyyymm)) 
+
+non_refund_month_table<-non_refund%>%group_by(store_id,yyyymm)%>%
+  summarise(amount=sum(amount,na.rm=T))%>%arrange(store_id,yyyymm)
+
+### store_id 추출 
+store_id<-unique(non_refund_month_table$store_id)  
+
+###최장 기간 추출
+yyyymm<-unique(non_refund_month_table$yyyymm)
+yyyymm<-as.data.frame(yyyymm)
+
+new_data<-data.frame(store_id=c(),yyyymm=c(),amount=c())
+
+##매출 시작시점 이후 매출이 발생하지 않으면 2 으로 채움, 매출 시작 시점 이전 데이터가 없으면 제거 스토어마다 처리하여 new_data에 추가
+for(i in store_id){
+  store<-subset(non_refund_month_table,store_id==i)
+  start_time<-min(store["yyyymm"])
+  store<-merge(store,yyyymm,all=T)%>%arrange(yyyymm)
+  store$amount<-ifelse(is.na(store$amount),2,store$amount)
+  store$store_id<-ifelse(is.na(store$store_id),i,store$store_id)
+  store<-subset(store,yyyymm>=start_time)
+  new_data<-rbind(new_data,store)
+}
+```
+
+## 3. 탐색적 자료분석
+### Exploratory Data Analysis  
+  * 상점별 시계열 데이터의 AR값과 adp.test p-value값을 계산        
+  * ar차수와 adf_p의 boxplot을 보면 ar차수는 대부분의 데이터가 2이하 이고,대부분의 데이터가   차분이 필요해보임         
+  * auto.arima 파리미터에서 max.p값을 2로 고정하고 ndiffs(차분여부)함수를 통해 d값을 고정          
+```{r,warning=FALSE ,message = FALSE}
+library(tseries) #adf.test,  version3.5.3
+new_data<-as.data.table(new_data)
+adf_p<-c()
+ar<-c()
+for(i in store_id){
+  adf_p<-c(adf_p,adf.test(new_data[store_id%in%i,amount])$p.value)
+  ar<-c(ar,ar(new_data[store_id%in%i,amount])$order)
+}
+boxplot(adf_p) #adf.test결과 대부분의 데이터가 차분이 필요함
+boxplot(ar) # auto.arima모델 적용시 max.p=2로 고정
+```
+
+
+
+## 4. 변수 선택 및 모델 구축
+### Feature Engineering & Initial Modeling  
+  * 매출액 변동계수 변수 생성      
+  * 최종 feature로 store_id,amount,yyyymm(년월),CV(변동계수)선택      
+```{r,warning=F ,message = FALSE}
+new_data$yyyymm<-as.character(new_data$yyyymm)
+
+####상점별 변동계수 계산
+total_table<-subset(new_data,yyyymm<=201811)%>%group_by(store_id)%>%
+  summarise(month_mean_amt=mean(amount,na.rm=T),
+           sd_mean_amt=sd(amount,na.rm=T))%>%
+  mutate(CV=sd_mean_amt/month_mean_amt)
+
+new_data<-merge(new_data,total_table,by="store_id")
+new_data<-new_data%>%select(store_id,amount,yyyymm,CV)
+```
+
+## 5. 모델 학습 및 검증    
+### Model Tuning & Evaluation    
+  * auto.arima,stl,ets모형을 각각 0.33의 동일한 가중치로 적합        
+  * auto.arima 파라미터만 ndiffs함수와 사전 ar값 조사를 통해 max.p를 2로 고정        
+  * auto.arima는 AIC를 최소로하는 p d q값을 자동적으로 탐색        
+  * 스토어마다 시작 연,월이 다르기 때문에 yyyymm변수를 통해 시작날짜를 설정        
+  * 최종예측은 이후 3개월을 예측하여 합산        
+  * 매출액 변동계수가 큰 상점들에 로그를 씌웠을때 오차가 커지는 경향을 확인
+    (변동성이 커서 잡음제거 목적을 달성하지 못하고 매출액을 과대 계상하게됨)            
+  * 모델링을 진행할때 CV(변동계수)값이 0.3(실험결과 오차가 가장적음)이하인 경우 
+    로그를 취하기로 결정            
+  * 충분한 시즌이 없는경우 stl모델을 적합하지 못하고 auto.arima와 ets모델만 적합          
+```{r,warning=FALSE,message = FALSE}
+library(forecast) #model.fit,version 8.9
+library(forecastHybrid) #model.fit,version 4.2.17
+pred_data<-data.frame()
+##hybridmodel(auto.arima, ets, stl)을 테스트
+###최종 제출 파일
+##sumission 최종 예측 
+for(i in store_id){
+  store<-subset(new_data,store_id==i)
+  start_year<-as.numeric(substr(store[1,"yyyymm"],1,4))
+  start_month<-as.numeric(substr(store[1,"yyyymm"],5,6))
+  if(store[1,"CV"]<0.3){
+    ts<-ts(log(store[,"amount"]),start=c(start_year,start_month),frequency=12)
+    ### d값을 ndiffs를 통해 고정 시킴,p(2이내로 고정),
+    ### q값은 AIC를 최소로 하는 auto.arima를 통해자동적으로탐색
+    d_param=ndiffs(ts)
+    hb_mdl<-hybridModel(ts,models="aes",
+                           a.arg=list(max.p=2,d=d_param),weight="equal",
+                           verbose = F)
+    pred<-as.data.frame(forecast(hb_mdl,h=3))
+    pred<-exp(pred)
+    pred$store_id<-i
+    pred_data<-rbind(pred_data,pred)
+  }else{
+    ts<-ts(store[,"amount"],start=c(start_year,start_month),frequency=12)
+    ### d값을 ndiffs를 통해 고정 시킴,p(2이내로 고정),
+    ### q값은 AIC를 최소로 하는 auto.arima를 통해 자동적으로탐색
+    d_param=ndiffs(ts)
+    hb_mdl<-hybridModel(ts,models="aes",
+                           a.arg=list(max.p=2,d=d_param),weight="equal",
+                           verbose = F)
+    pred<-as.data.frame(forecast(hb_mdl,h=3))
+    pred$store_id<-i
+    pred_data<-rbind(pred_data,pred)
+  }
+}
+
+##제출 파일
+submission<-pred_data%>%group_by(store_id)%>%
+  summarise(amount=sum(`Point Forecast`,na.rm=T))
+
+write.csv(submission,"submission.csv",row.names=F)
+```
+
+## 6. 결과 및 결언
+### Conclusion & Discussion  
+  * 로그를 취했을때 과대계상되는 상점들을 명확하게 구분방법을 알 필요가 있음      
+  * 한달 단위로 리샘플링 했지만 다른 방식으로도 해볼 필요가 있음      
+  * 데이터 기간이 부족한 상점들은 stl모형을 적합할수 없었는데   
+    데이터가 더 많아지면 오차가 개선 될것이라고 생각    
+  
