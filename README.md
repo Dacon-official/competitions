@@ -13,3 +13,4 @@
 [[산업] 월간 데이콘 1 반도체 박막 두께 분석 대회](http://bit.ly/2TEEALT) | **semiconductor_thin_film_thickness_prediction** |
 [[과학] 월간 데이콘 2 천체 유형 분류 대회](http://bit.ly/3aXxeJt)  | - | 업로드 예정
 [[산업] 원자력발전소 상태 판단 대회](http://bit.ly/2W26DXi)   | - | 업로드 예정
+[[산업] 블럭 장난감 제조 공정 최적화 경진대회](https://bit.ly/36fqJAn)   | **process_optimization** | 
