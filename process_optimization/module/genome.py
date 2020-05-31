@@ -163,8 +163,7 @@ class Genome():
         self.process_mode = 0
         self.process_time = 0
         
-        return self.submission
-    
+        return self.submission    
     
 def genome_score(genome):
     submission = genome.predict(order_ini)    
