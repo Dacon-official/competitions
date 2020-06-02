@@ -123,7 +123,7 @@ class Genome():
             elif out1 == 'CHECK_3':
                 if self.process == 1:
                     self.process = 0
-                    self.check_timr = 28
+                    self.check_time = 28
                 self.check_time -= 1
                 self.process_mode = 2
                 if self.check_time == 0:
