@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from module.simulator import Simulator
-
 simulator = Simulator()
 submission_ini = pd.read_csv(os.path.join(Path(__file__).resolve().parent, 'sample_submission.csv'))
 order_ini = pd.read_csv(os.path.join(Path(__file__).resolve().parent, 'order.csv'))
@@ -95,7 +94,7 @@ class Genome():
     def predict(self, order):
         order = self.create_order(order)
         self.submission = submission_ini
-        self.submission.loc[:, 'PRT_1':'PRT_4'] = 5
+        self.submission.loc[:, 'PRT_1':'PRT_4'] = 0
         for s in range(self.submission.shape[0]):
             self.update_mask()
             inputs = np.array(order.loc[s//24:(s//24+30), 'BLK_1':'BLK_4']).reshape(-1)
@@ -123,7 +122,7 @@ class Genome():
             elif out1 == 'CHECK_3':
                 if self.process == 1:
                     self.process = 0
-                    self.check_time = 28
+                    self.check_timr = 28
                 self.check_time -= 1
                 self.process_mode = 2
                 if self.check_time == 0:
@@ -150,8 +149,8 @@ class Genome():
             else:
                 self.submission.loc[s, 'MOL_A'] = 0
                 
-        # 4/14 까지 MOL = 0
-        self.submission.loc[:336, 'MOL_A'] = 0
+        # 23일간 MOL = 0
+        self.submission.loc[:24*23, 'MOL_A'] = 0
         
         # A 라인 = B 라인
         self.submission.loc[:, 'Event_B'] = self.submission.loc[:, 'Event_A']
@@ -168,5 +167,5 @@ class Genome():
 def genome_score(genome):
     submission = genome.predict(order_ini)    
     genome.submission = submission    
-    genome.score = simulator.get_score(submission)    
+    genome.score, _ = simulator.get_score(submission)    
     return genome

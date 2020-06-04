@@ -170,25 +170,14 @@ class Simulator:
         df_rescale = df_rescale.fillna(0)
         return df_rescale
 
-    def cal_score(self, df, df_stock, blk_diffs):
+    def cal_score(self, blk_diffs):
         # Block Order Difference
         blk_diff_m = 0
-        blk_diff_p = 0
         for item in blk_diffs:
             if item < 0:
                 blk_diff_m = blk_diff_m + abs(item)
-            else:
-                blk_diff_p = blk_diff_p + abs(item)
-
-        # Non Logical PRT Number
-        prt_values = df[['PRT_1', 'PRT_2', 'PRT_3', 'PRT_4']].values
-        prt_minus = -1 * np.sum(prt_values[np.where(prt_values < 0)])
-       
         score = blk_diff_m
-        if prt_minus > 0:
-            return 1e8
-        else:
-            return score
+        return score
     
     def get_score(self, df):
         df = self.subprocess(df) 
@@ -199,5 +188,5 @@ class Simulator:
         out = self.add_stock(out, self.stock)
         order = self.order_rescale(out, self.order)                    
         out, blk_diffs = self.cal_stock(out, order)                    
-        score = self.cal_score(df, out, blk_diffs) 
-        return score        
+        score = self.cal_score(blk_diffs) 
+        return score, out
