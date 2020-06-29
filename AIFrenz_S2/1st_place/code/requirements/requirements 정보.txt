@@ -1,0 +1,28 @@
+model3_requirements로 수행한 File
+Model3.ipynb
+Ensemble.ipynb
+DataConverter.ipynb
+MakeNewData.ipynb
+
+torch==1.5.0
+timm==0.1.26
+torchvision==0.6.0
+numpy==1.18.1
+pandas==1.0.1
+scikit-learn==0.22.1
+
+model12_requirements로 수행한 File
+Model1_Kfold1.ipynb
+Model1_Kfold2.ipynb
+Model1_Kfold3.ipynb
+Model1_Kfold4.ipynb
+Model1_Kfold5.ipynb
+Model1_Kfold_AGG.ipynb
+Model2.ipynb
+
+torch==1.2.0
+timm==0.1.20
+numpy==1.18.1
+pandas==1.0.1
+scikit-learn==0.21.3
+torchvision==0.4.0a0+6b959ee
