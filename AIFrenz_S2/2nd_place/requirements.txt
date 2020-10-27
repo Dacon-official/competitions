@@ -20,7 +20,7 @@ chardet==3.0.4
 checkbox-support==0.22
 colorama==0.4.3
 command-not-found==0.3
-cryptography==1.2.3
+cryptography==3.2
 cycler==0.10.0
 decorator==4.4.1
 defer==1.0.6
