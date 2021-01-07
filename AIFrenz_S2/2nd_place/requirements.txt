@@ -77,7 +77,7 @@ konlpy==0.5.2
 language-selector==0.1
 lightgbm==2.3.1
 louis==2.6.4
-lxml==4.5.0
+lxml==4.6.2
 Mako==1.0.3
 Markdown==3.2
 MarkupSafe==0.23
