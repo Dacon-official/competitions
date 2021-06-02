@@ -164,7 +164,7 @@ ubuntu-drivers-common==0.0.0
 ufw==0.35
 unattended-upgrades==0.1
 update==0.0.1
-urllib3==1.25.8
+urllib3==1.26.5
 usb-creator==0.3.0
 wcwidth==0.1.8
 webencodings==0.5.1
