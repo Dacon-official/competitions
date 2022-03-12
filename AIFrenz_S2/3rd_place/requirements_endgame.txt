@@ -59,7 +59,7 @@ pandas==1.0.3
 pandocfilters==1.4.2
 parso==0.7.0
 pickleshare==0.7.5
-Pillow==7.1.2
+Pillow==9.0.1
 plotly==4.6.0
 pooch==1.1.0
 prometheus-client==0.7.1
