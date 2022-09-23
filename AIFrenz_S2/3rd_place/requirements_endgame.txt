@@ -64,7 +64,7 @@ plotly==4.6.0
 pooch==1.1.0
 prometheus-client==0.7.1
 prompt-toolkit==3.0.5
-protobuf==3.11.3
+protobuf==3.18.3
 pyasn1==0.4.8
 pyasn1-modules==0.2.8
 pycodestyle==2.6.0
